@@ -10,10 +10,10 @@ Deezer for the **Shanling Q2** running [Q2 Pod](https://github.com/DiamondBond/q
 
 1. Download `q2-deezer-*.zip` from the [latest release](https://github.com/group-a-study/q2-deezer/releases/latest).
 2. Power the Q2 off, then put its microSD card in your computer.
-3. Unzip the file to the card's root, so the card has `.deezer/q2-deezer`, `.deezer/run` and `.deezer/q2app`. The leading dot hides the folder on macOS (Cmd+Shift+. in Finder shows it) and Linux.
+3. Unzip the file to the card's root, so the card has `.deezer/q2-deezer`, `.deezer/run`, `.deezer/q2app` and its icons `.deezer/icon.png` and `.deezer/icon-40.png`. The leading dot hides the folder on macOS (Cmd+Shift+. in Finder shows it) and Linux.
 4. Eject the card, put it back in the Q2 and power it on.
 
-Deezer then has a row in **Streaming**.
+Deezer then has a row in **Streaming**, with its logo.
 
 ## Sign in
 
@@ -30,21 +30,21 @@ Deezer's page has **Downloaded Songs**, **Liked Songs**, **Playlists** (Flow and
 
 ## Organize Files
 
-**On** (the default): each new song is filed by its album's artist, then its album, numbered in track order:
+**On** (the default): each new song is filed by its album's artist, then its album and year, numbered in track order. This is the layout Plex, Jellyfin and Navidrome expect:
 
-    Deezer/Broadcast/Tender Buttons/01 - Tears in the Typing Pool [12345].flac
-    Deezer/Broadcast/Tender Buttons/02 - Valerie [12346].flac
-    Deezer/Various Artists/Some Compilation/2-07 - Song [23456].flac    (disc 2 of 2)
+    Deezer/Broadcast/Tender Buttons (2005)/01 - Tears in the Typing Pool [12345].flac
+    Deezer/Broadcast/Tender Buttons (2005)/02 - Valerie [12346].flac
+    Deezer/Various Artists/Some Compilation (2019)/2-07 - Song [23456].flac    (disc 2 of 2)
 
-A song downloaded from a playlist, Liked Songs or a search lands in its album's folder with its track number too: q2-deezer looks it up first. **Downloaded Songs** then lists your artists, each artist's albums, and each album's songs in track order. A press plays the album from that song on.
+A song downloaded from a playlist, Liked Songs or a search lands in its album's folder with its track number too: q2-deezer looks it up first. **Downloaded Songs** then lists your artists, each artist's albums oldest first, and each album's songs in track order. A press plays the album from that song on.
 
 **Off:** every new song goes straight into `Deezer/`, as `Title - Artist [12345].flac`, as OpenDeezer names them. **Downloaded Songs** lists them newest first.
 
-The setting is saved in `.deezer/organize` and applies to new downloads. Songs already on the card stay where they are and are still recognised as downloaded.
+The setting is saved in `.deezer/organize` and applies to new downloads. Songs already on the card stay where they are and are still recognised as downloaded. An album folder made by v3.1, without its year, is renamed to include it when that album's next song downloads, so the album stays in one folder. Run **Library → Update Local Music** afterwards.
 
 ## Update and remove
 
-**System settings → Apps** shows **Update** when a newer release is out. By hand, replace `.deezer/q2-deezer`, `.deezer/run` and `.deezer/q2app`. Either way, `.deezer/arl` (your sign-in), `.deezer/quality`, `.deezer/organize` and `.deezer/queue.json` (songs waiting to download) are kept.
+**System settings → Apps** shows **Update** when a newer release is out. By hand, replace `.deezer/q2-deezer`, `.deezer/run`, `.deezer/q2app`, `.deezer/icon.png` and `.deezer/icon-40.png`. Either way, `.deezer/arl` (your sign-in), `.deezer/quality`, `.deezer/organize` and `.deezer/queue.json` (songs waiting to download) are kept.
 
 To remove it, press **Deezer** twice in **System settings → Apps**, or delete `.deezer`. Your songs in `Deezer/` stay.
 

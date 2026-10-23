@@ -20,7 +20,7 @@ import (
 // The download queue (contrib/shanlingq2/README, Downloads): as OpenDeezer downloads, every track
 // is fetched, decrypted, tagged (title, artist, album, number, year, cover) and renamed into place
 // under Deezer/ on the card: with Organize Files on, in its album's folder,
-// "<album artist>/<album>/07 - Title [id].flac", its album, disc and number looked up first
+// "<album artist>/<album> (<year>)/07 - Title [id].flac", its album, disc and number looked up first
 // (TrackPlacement); off, as OpenDeezer does, in Deezer/ itself as "Title - Artist [id].flac" (or
 // .mp3). The Q2 plays them from there, as local music. One downloads at a time (the Q2's card and
 // CPU); the ones waiting are kept in .deezer/queue.json, so they carry on after a restart or USB
@@ -159,9 +159,33 @@ func (dl *downloads) place(dz *deezer.Client, t deezer.Track) (deezer.Track, str
 		t.DiscNumber = p.Disc
 	}
 	t.AlbumArtist = p.Artist
-	dir := filepath.Join(dl.folder, deezer.FolderName(p.Artist, "Unknown Artist"),
-		deezer.FolderName(t.AlbumName, "Unknown Album"))
+	year := p.Year // the album's, which the folder names
+	if year == "" {
+		year = t.Year
+	}
+	artist := filepath.Join(dl.folder, deezer.FolderName(p.Artist, "Unknown Artist"))
+	dir := filepath.Join(artist, deezer.AlbumFolderName(t.AlbumName, year, "Unknown Album"))
+	dl.renamed(filepath.Join(artist, deezer.FolderName(t.AlbumName, "Unknown Album")), dir)
 	return t, dir, deezer.OrganizedName(t, p), nil
+}
+
+// renamed moves an album's folder named as v3.1 named them, without its year, to its name now, so
+// the album's songs stay together; the songs on the card read again, at their new paths.
+func (dl *downloads) renamed(old, now string) {
+	if old == now {
+		return
+	}
+	if fi, err := os.Stat(old); err != nil || !fi.IsDir() {
+		return
+	}
+	if _, err := os.Stat(now); err == nil { // both there: the new one is used, the old one left
+		return
+	}
+	if err := os.Rename(old, now); err != nil {
+		log.Printf("rename %s: %v", filepath.Base(old), err)
+		return
+	}
+	dl.rescan()
 }
 
 // order is the local row context for songs in dir: "album" in an album's folder, so the Q2 lists

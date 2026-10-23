@@ -243,6 +243,13 @@ func TestOrganizedNames(t *testing.T) {
 	if !strings.HasSuffix(long, " [123456789]") || len(long) > 180 || !utf8.ValidString(long) {
 		t.Errorf("long %q (%d bytes)", long, len(long))
 	}
+	for _, c := range [][4]string{{"Tender Buttons", "2005", "Tender Buttons (2005)"}, {"Tender Buttons", "", "Tender Buttons"},
+		{"Tender Buttons", "05", "Tender Buttons"}, {"", "2005", "Unknown (2005)"}, {"AC/DC: Live?", "1992", "AC_DC_ Live_ (1992)"},
+		{strings.Repeat("a", 150), "2005", strings.Repeat("a", 93) + " (2005)"}} {
+		if got := AlbumFolderName(c[0], c[1], "Unknown"); got != c[2] {
+			t.Errorf("AlbumFolderName(%q, %q) = %q, want %q", c[0], c[1], got, c[2])
+		}
+	}
 	for in, want := range map[string]string{"": "Unknown", " . ": "Unknown", "track": "track", "AC/DC": "AC_DC",
 		"Mr. Bungle.": "Mr. Bungle", " Björk ": "Björk", strings.Repeat("a", 150): strings.Repeat("a", 100)} {
 		if got := FolderName(in, "Unknown"); got != want {

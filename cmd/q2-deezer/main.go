@@ -29,7 +29,7 @@ import (
 	"github.com/group-a-study/q2-deezer/internal/tlsroots"
 )
 
-const version = "q2-v3.1"
+const version = "q2-v3.2"
 
 // transport carries every request to Deezer: TLS checked against the add-on's own roots, as the
 // firmware has none. Tests answer for Deezer instead.
@@ -297,8 +297,9 @@ func (d *daemon) setQuality(q string) error {
 }
 
 // Organize Files, .deezer/organize: "on" (the default, and anything but "off") files each new
-// download as Deezer/<album artist>/<album>/07 - Title [id].flac; "off" as OpenDeezer does, every
-// one in Deezer/ as "Title - Artist [id].flac". Files already downloaded stay where they are.
+// download as Deezer/<album artist>/<album> (<year>)/07 - Title [id].flac; "off" as OpenDeezer
+// does, every one in Deezer/ as "Title - Artist [id].flac". Files already downloaded stay where
+// they are.
 func readOrganize(dir string) bool {
 	b, _ := os.ReadFile(filepath.Join(dir, "organize"))
 	return strings.TrimSpace(string(b)) != "off"

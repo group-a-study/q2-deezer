@@ -3,7 +3,7 @@ package deezer
 // q2-deezer's additions to OpenDeezer's client (the rest of this package, kept as it is there so it
 // can be updated from it): the app's TLS roots, the account's favourite albums and artists, which
 // the Q2's menu lists, an album's own details for its tracks' tags, a download of a track already
-// looked up, and where a track goes in the organized layout (Artist/Album/07 - Title [id]).
+// looked up, and where a track goes in the organized layout (Artist/Album (Year)/07 - Title [id]).
 
 import (
 	"context"
@@ -199,6 +199,16 @@ func FolderName(s, unknown string) string {
 		return unknown
 	}
 	return sanitizeFilename(truncateSafe(strings.TrimSpace(s), 100))
+}
+
+// AlbumFolderName is an album's folder: its title (FolderName's) and its year, "Tender Buttons
+// (2005)", as Plex, Jellyfin and Navidrome name them; the title is cut first, so the year stays.
+// Without a year (four digits), the title alone.
+func AlbumFolderName(album, year, unknown string) string {
+	if len(year) != 4 || strings.Trim(year, "0123456789") != "" {
+		return FolderName(album, unknown)
+	}
+	return FolderName(truncateSafe(strings.TrimSpace(album), 100-len(" (0000)")), unknown) + " (" + year + ")"
 }
 
 // FavoriteAlbums lists the user's saved albums (gw pageProfile, as Playlists).

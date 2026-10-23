@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -628,7 +629,20 @@ func (d *daemon) cardArtists(cursor string) q2spot.Reply {
 	return page(rows, cursor, "")
 }
 
-// cardAlbums is an artist's folder: each album's, its songs in track order.
+// albumYear is an album folder's year, "Tender Buttons (2005)"'s 2005; 9999 without one, so those
+// come after the dated ones.
+func albumYear(folder string) int {
+	if m := yearSuffix.FindStringSubmatch(folder); m != nil {
+		y, _ := strconv.Atoi(m[1])
+		return y
+	}
+	return 9999
+}
+
+var yearSuffix = regexp.MustCompile(` \(([0-9]{4})\)$`)
+
+// cardAlbums is an artist's folder: each album's, oldest first (then by name), its songs in track
+// order.
 func (d *daemon) cardAlbums(artist, cursor string) q2spot.Reply {
 	if artist == "" || artist == "." || artist == ".." || strings.ContainsAny(artist, "/\\") {
 		return q2spot.Fail(q2spot.Bad, "Bad request")
@@ -638,6 +652,7 @@ func (d *daemon) cardAlbums(artist, cursor string) q2spot.Reply {
 		return q2spot.Fail(q2spot.Unavailable, "It isn't on the card any more")
 	}
 	loose, albums := songsIn(dir)
+	sort.SliceStable(albums, func(i, j int) bool { return albumYear(albums[i]) < albumYear(albums[j]) })
 	var rows []q2spot.Row
 	for _, a := range albums {
 		n, _ := songsIn(filepath.Join(dir, a))
@@ -661,7 +676,7 @@ func (d *daemon) menu() q2spot.Reply {
 	if _, dirs := songsIn(d.dl.folder); len(dirs) > 0 { // Artist/Album folders: browsed by them
 		songs.Kind, songs.URI = "list", "cardartists"
 	}
-	org := q2spot.Row{Kind: "action", URI: "organize", Title: "Organize Files: On", Subtitle: "Artist / Album / 01 - Song"}
+	org := q2spot.Row{Kind: "action", URI: "organize", Title: "Organize Files: On", Subtitle: "Artist / Album (Year) / 01 - Song"}
 	if !d.organized() {
 		org.Title, org.Subtitle = "Organize Files: Off", "Every song in one folder, Deezer/"
 	}

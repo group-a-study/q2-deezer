@@ -12,6 +12,9 @@ it downloads. Nothing is flashed for it.
                ELF flag the Q2's kernel requires and Go doesn't, and writes the ZIP
   launcher.sh  installed as .deezer/run: q2-deezer copied to /tmp and run there in a restart loop
   q2app        installed as .deezer/q2app: the card app manifest (name=Deezer, search=Search Deezer)
+  icon.png, icon-40.png
+               installed beside it: Streaming's row icon, 52 px (Legacy) and 40 px (iPod), Deezer's
+               heart in white on Deezer purple, in Q2 Pod's style
   test_launcher.py
                runs launcher.sh on the host with a fake app
 
@@ -99,8 +102,8 @@ order), info does nothing. A row's position is the op Play/Pause held sends.
       the queue; cancel <id>, cancelall, retry [<id>], clearfailed
   cardartists, cardalbums <artist>
       Downloaded Songs with Artist/Album folders on the card: the songs in Deezer/ itself
-      (Unsorted Songs), then each artist's folder; an artist's albums, each a local folder row
-      with context album
+      (Unsorted Songs), then each artist's folder; an artist's albums, oldest first, each a local
+      folder row with context album
   quality, organize, account, signout, stop
       the next Quality; Organize Files on or off; the account and Sign Out; the arl removed; the
       app stopped
@@ -129,7 +132,8 @@ time. Offline, signed out or with the card away, the queue waits and tries again
 Organize Files on (the default, .deezer/organize missing or anything but "off"): before a song
 downloads, the public API is asked where it sits (/track/<id>: its album, disc and number) and,
 once per album, the album's artist, title and year (/album/<id>) and its discs (/album/<id>/tracks).
-The song goes in Deezer/<album artist>/<album>/ as "07 - Title [id].flac": "2-07 - ..." on an album
+The song goes in Deezer/<album artist>/<album> (<year>)/ as "07 - Title [id].flac" (the album folder
+named as Plex, Jellyfin and Navidrome expect; an album without a year, its title alone): "2-07 - ..." on an album
 of more than one disc, three digits on an album of 100 tracks or more, so a folder's names sort in
 track order. Names are cut to 180 bytes and folders to 100, and the characters a FAT card refuses
 (< > : " / \ | ? * and control characters, a trailing dot or space) are replaced. The tags gain the

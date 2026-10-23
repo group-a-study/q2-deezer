@@ -54,7 +54,7 @@ func TestOrganizeSetting(t *testing.T) {
 		t.Fatalf("no Organize Files row in %q", rows)
 		return nil
 	}
-	if got := row(); got[0] != "action" || got[2] != "Organize Files: On" || got[3] != "Artist / Album / 01 - Song" {
+	if got := row(); got[0] != "action" || got[2] != "Organize Files: On" || got[3] != "Artist / Album (Year) / 01 - Song" {
 		t.Fatalf("default %q", got)
 	}
 	if head, _ := r.ask("organize"); head[1] != "ok" || head[2] != "New downloads go straight in Deezer/" {
@@ -73,7 +73,7 @@ func TestOrganizeSetting(t *testing.T) {
 	}
 }
 
-// Organized downloads: each song in its album artist's and album's folders, numbered in track order
+// Organized downloads: each song in its album artist's and album's (year) folders, numbered in track order
 // (a disc first on an album of two), from a playlist as from an album; the tags it lacked filled
 // in; the card browsed by artist and album, an album's songs in track order; found again after a
 // restart, an interrupted download's temp file swept from an album's folder; and, turned off, the
@@ -90,7 +90,7 @@ func TestOrganizedDownloads(t *testing.T) {
 		_, rows := r.ask("downloads")
 		return len(rows) > 0 && rows[0][2] == "Try the Failed Again"
 	})
-	cults := filepath.Join("Various Artists", "Witch Cults of the Radio Age")
+	cults := filepath.Join("Various Artists", "Witch Cults of the Radio Age (2003)")
 	want := []string{filepath.Join(cults, "1-01 - The Be Colony [1].flac"), filepath.Join(cults, "1-03 - Mother Is the Milky Way [2].flac")}
 	if got := r.tree(); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("files %q", got)
@@ -114,7 +114,7 @@ func TestOrganizedDownloads(t *testing.T) {
 	r.ask("clearfailed")
 	// An album: one disc, so no disc in the names; all on the card plays its folder in track order.
 	r.ask("download", "album:7")
-	tender := filepath.Join(r.folder, "Broadcast", "Tender Buttons")
+	tender := filepath.Join(r.folder, "Broadcast", "Tender Buttons (2005)")
 	waitFor(t, "the album", 5*time.Second, func() bool {
 		_, err := os.Stat(filepath.Join(tender, "02 - Valerie [5].flac"))
 		return err == nil
@@ -172,5 +172,43 @@ func TestOrganizedDownloads(t *testing.T) {
 	}
 	if _, rows = r.ask("tracks", "flow"); rows[1][0] != "local" || rows[1][4] != "" {
 		t.Fatalf("flat row %q", rows[1])
+	}
+}
+
+// An album's folder from v3.1, without its year, is renamed when the album's next song comes, its
+// songs found at their new paths; an artist's albums list oldest first, undated ones last.
+func TestOrganizedYearFolders(t *testing.T) {
+	f := newFakeDeezer(t)
+	r := newRigOrganize(t, goodARL, f, "on")
+	r.stop()
+	broadcast := filepath.Join(r.folder, "Broadcast")
+	for _, p := range []string{"Tender Buttons/01 - Tears in the Typing Pool [4].flac", "Haha Sound (2003)/01 - Pendulum [97].flac",
+		"Work and Non Work/01 - Accidentals [98].flac", "Ha Ha (1999)/01 - Echo's Answer [99].flac"} {
+		os.MkdirAll(filepath.Dir(filepath.Join(broadcast, p)), 0o755)
+		os.WriteFile(filepath.Join(broadcast, p), plain("x", 64), 0o644)
+	}
+	r.start(f)
+	waitFor(t, "signed in", 5*time.Second, func() bool { return r.d.authState() == authOK })
+	if head, _ := r.ask("download", "album:7"); head[2] != "Downloading 1 song" { // 4 is on the card already
+		t.Fatalf("album %q", head)
+	}
+	tender := filepath.Join(broadcast, "Tender Buttons (2005)")
+	waitFor(t, "the album", 5*time.Second, func() bool {
+		_, err := os.Stat(filepath.Join(tender, "02 - Valerie [5].flac"))
+		return err == nil
+	})
+	if _, err := os.Stat(filepath.Join(tender, "01 - Tears in the Typing Pool [4].flac")); err != nil {
+		t.Fatal("the old folder's song not moved:", err)
+	}
+	if _, err := os.Stat(filepath.Join(broadcast, "Tender Buttons")); !os.IsNotExist(err) {
+		t.Fatal("the old folder left")
+	}
+	_, rows := r.ask("tracks", "album:7")
+	if rows[0][1] != tender+"/" || rows[1][1] != filepath.Join(tender, "01 - Tears in the Typing Pool [4].flac") {
+		t.Fatalf("rows %q", rows[:2])
+	}
+	if _, rows = r.ask("cardalbums", "Broadcast"); strings.Join(titlesOf(rows), ",") !=
+		"local Ha Ha (1999),local Haha Sound (2003),local Tender Buttons (2005),local Work and Non Work" {
+		t.Fatalf("albums %q", titlesOf(rows))
 	}
 }
