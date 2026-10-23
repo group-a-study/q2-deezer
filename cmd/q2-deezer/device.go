@@ -18,9 +18,9 @@ import (
 
 // The Q2's Deezer page (Q2 Pod's card app page, q2-pod's patch/addon.c): the
 // account's music and Deezer's catalogue, each list opened by a row (kind list: its uri the op, its
-// context the argument), a song downloaded by a press (kind action: download <list>#<id>), a whole
-// list by its Download All row or Play/Pause held on its row (the row's position: the op held
-// sends). A song on the card is a local row: a press plays it from the card, as local music (its
+// context the argument), a song downloaded by a press (kind action: download <list>#<id>), or in
+// Stream mode played from it (stream <list>#<id>, stream.go), a whole list by its Download All row
+// or Play/Pause held on its row (the row's position: the op held sends). A song on the card is a local row: a press plays it from the card, as local music (its
 // uri a file; a folder's ends "/", which lists its songs; context "album", in track order, as an
 // organized album's folder holds them). Lists whose rows change as downloads finish say "refresh",
 // asked again every 2 s while on top.
@@ -185,9 +185,17 @@ func playlistRow(p deezer.Playlist) q2spot.Row {
 }
 
 // trackRow is a song of the list ctx: on the card, a local row that plays it; else a press
-// downloads it, its state beside its artists.
+// downloads it, or in Stream mode plays it (Play/Pause held still downloads it), its state beside
+// its artists.
 func (d *daemon) trackRow(t deezer.Track, ctx string) q2spot.Row {
 	artists := t.ArtistLine()
+	op := "download"
+	if d.streaming() {
+		op = "stream"
+		if d.st.loading(t.ID) {
+			artists += " · loading"
+		}
+	}
 	switch st, extra := d.dl.state(t.ID); st {
 	case "done":
 		return q2spot.Row{Kind: "local", URI: extra, Context: d.dl.order(filepath.Dir(extra)), Title: t.Name,
@@ -199,7 +207,7 @@ func (d *daemon) trackRow(t deezer.Track, ctx string) q2spot.Row {
 	case "failed":
 		artists += " · failed: press to try again"
 	}
-	return q2spot.Row{Kind: "action", URI: "download", Context: ctx + "#" + t.ID, Title: t.Name, Subtitle: artists,
+	return q2spot.Row{Kind: "action", URI: op, Context: ctx + "#" + t.ID, Title: t.Name, Subtitle: artists,
 		Position: "download"}
 }
 
@@ -227,14 +235,14 @@ func (d *daemon) device(req q2spot.Request) q2spot.Reply {
 		var rows []q2spot.Row
 		for _, op := range []string{"caps", "menu", "playlists", "albums", "artists", "artist", "tracks", "search",
 			"found", "downloads", "account", "download", "cancel", "cancelall", "retry", "clearfailed", "quality", "organize",
-			"cardartists", "cardalbums", "signout", "stop"} {
+			"mode", "stream", "cardartists", "cardalbums", "signout", "stop"} {
 			rows = append(rows, q2spot.Row{Kind: "op", URI: op})
 		}
 		return q2spot.Reply{Message: version, Rows: rows}
 	case "menu":
 		return d.menu()
 	case "downloads":
-		return d.downloadsPage(req.Arg(0))
+		return d.downloadsPage(cursor(req, 0))
 	case "cancel":
 		if !d.dl.remove(req.Arg(0)) {
 			return q2spot.Fail(q2spot.Unavailable, "It isn't waiting any more")
@@ -267,13 +275,22 @@ func (d *daemon) device(req q2spot.Request) q2spot.Reply {
 			return q2spot.Fail(q2spot.Error, "Couldn't save the setting")
 		}
 		if on {
-			return ok("New downloads go in Artist/Album folders")
+			return ok("New downloads go in Artist/Year - Album folders")
 		}
 		return ok("New downloads go straight in Deezer/")
+	case "mode":
+		stream := !d.streaming()
+		if err := d.setMode(stream); err != nil {
+			return q2spot.Fail(q2spot.Error, "Couldn't save the setting")
+		}
+		if stream {
+			return ok("A press plays the song; nothing is kept")
+		}
+		return ok("A press downloads the song")
 	case "cardartists":
-		return d.cardArtists(req.Arg(0))
+		return d.cardArtists(cursor(req, 0))
 	case "cardalbums":
-		return d.cardAlbums(req.Arg(0), req.Arg(1))
+		return d.cardAlbums(req.Arg(0), cursor(req, 1))
 	case "signout":
 		if err := d.signOut(); err != nil {
 			return q2spot.Fail(q2spot.Error, "Couldn't remove .deezer/arl")
@@ -287,7 +304,6 @@ func (d *daemon) device(req q2spot.Request) q2spot.Reply {
 	if err != nil {
 		return fail(err)
 	}
-	// A list's cursor is its last argument: the first for the account's lists, the second after one.
 	list := func(key, cursor, msg string, fetch func() (listing, error)) q2spot.Reply {
 		l, err := d.cache.get(key, fetch)
 		if err != nil {
@@ -305,7 +321,7 @@ func (d *daemon) device(req q2spot.Request) q2spot.Reply {
 		return q2spot.Reply{Rows: []q2spot.Row{info(a.Name, plan),
 			{Kind: "action", URI: "signout", Title: "Sign Out", Subtitle: "Removes your ARL; your downloads stay"}}}
 	case "playlists":
-		return list("playlists", req.Arg(0), "", func() (listing, error) {
+		return list("playlists", cursor(req, 0), "", func() (listing, error) {
 			ps, err := dz.Playlists()
 			l := listing{rows: []q2spot.Row{open("flow", "Flow", "Your mix of the moment"),
 				open("chart", "Top Charts", "Deezer's most played")}}
@@ -315,7 +331,7 @@ func (d *daemon) device(req q2spot.Request) q2spot.Reply {
 			return l, err
 		})
 	case "albums":
-		return list("albums", req.Arg(0), "", func() (listing, error) {
+		return list("albums", cursor(req, 0), "", func() (listing, error) {
 			as, err := dz.FavoriteAlbums()
 			var l listing
 			for _, a := range as {
@@ -324,7 +340,7 @@ func (d *daemon) device(req q2spot.Request) q2spot.Reply {
 			return l, err
 		})
 	case "artists":
-		return list("artists", req.Arg(0), "", func() (listing, error) {
+		return list("artists", cursor(req, 0), "", func() (listing, error) {
 			as, err := dz.FavoriteArtists()
 			var l listing
 			for _, a := range as {
@@ -337,7 +353,7 @@ func (d *daemon) device(req q2spot.Request) q2spot.Reply {
 		if id == "" {
 			return q2spot.Fail(q2spot.Bad, "Bad request")
 		}
-		return list("artist:"+id, req.Arg(1), "", func() (listing, error) {
+		return list("artist:"+id, cursor(req, 1), "", func() (listing, error) {
 			pg, err := dz.ArtistProfile(id)
 			if err != nil {
 				return listing{}, err
@@ -358,7 +374,7 @@ func (d *daemon) device(req q2spot.Request) q2spot.Reply {
 		if !listCtx(ctx) {
 			return q2spot.Fail(q2spot.Bad, "Bad request")
 		}
-		return d.tracksPage(dz, ctx, req.Arg(1))
+		return d.tracksPage(dz, ctx, cursor(req, 1))
 	case "search":
 		term := strings.TrimSpace(req.Arg(0))
 		if term == "" {
@@ -378,7 +394,7 @@ func (d *daemon) device(req q2spot.Request) q2spot.Reply {
 	case "found":
 		kind, term, _ := strings.Cut(req.Arg(0), ":")
 		if kind == "tracks" {
-			return d.tracksPage(dz, "search:"+term, req.Arg(1))
+			return d.tracksPage(dz, "search:"+term, cursor(req, 1))
 		}
 		sr, err := d.search(dz, term)
 		if err != nil {
@@ -401,11 +417,23 @@ func (d *daemon) device(req q2spot.Request) q2spot.Reply {
 		default:
 			return q2spot.Fail(q2spot.Bad, "Bad request")
 		}
-		return page(rows, req.Arg(1), "")
+		return page(rows, cursor(req, 1), "")
 	case "download":
 		return d.download(dz, req.Arg(0))
+	case "stream":
+		return d.stream(dz, req.Arg(0))
 	}
 	return q2spot.Fail(q2spot.Unsupported, "Update Deezer on the card")
+}
+
+// cursor is a list request's cursor, its argument after the n that name the list (Q2SPOT/1: the
+// op's last argument). Q2 Pod's card app page up to 1.4.1 sent each More…'s cursor after the one
+// before ("albums 30 60"), which read as the first showed the second page again: the last is the one.
+func cursor(req q2spot.Request, n int) string {
+	if len(req.Args) <= n {
+		return ""
+	}
+	return req.Args[len(req.Args)-1]
 }
 
 // listCtx is a list of songs the page opens.
@@ -520,9 +548,54 @@ func (d *daemon) tracksPage(dz *deezer.Client, ctx, cursor string) q2spot.Reply 
 	}
 	if on == len(ts) {
 		all = d.allOnCard(rows[1:])
+	} else if d.streaming() {
+		rows = append([]q2spot.Row{{Kind: "action", URI: "stream", Context: ctx, Title: "Play All",
+			Subtitle: "Stream it, keeping none"}}, rows...)
+		rows[1] = all
+		return page(rows, cursor, "refresh")
 	}
 	rows[0] = all
 	return page(rows, cursor, "refresh")
+}
+
+// stream plays a list's songs in Stream mode (stream.go), from one of them (<list>#<id>) or its first.
+func (d *daemon) stream(dz *deezer.Client, arg string) q2spot.Reply {
+	if !dz.Account().Premium {
+		return q2spot.Fail(q2spot.Premium, "Streaming needs a paid Deezer plan")
+	}
+	ctx, one := arg, ""
+	if i := strings.LastIndexByte(arg, '#'); i >= 0 {
+		ctx, one = arg[:i], arg[i+1:]
+	}
+	if !listCtx(ctx) {
+		return q2spot.Fail(q2spot.Bad, "Bad request")
+	}
+	ts, err := d.tracks(dz, ctx)
+	if errors.Is(err, errLoading) {
+		return q2spot.Fail(q2spot.Unavailable, "Still loading: try again in a moment")
+	}
+	if err != nil {
+		return fail(err)
+	}
+	from := 0
+	if one != "" {
+		from = -1
+		for i, t := range ts {
+			if t.ID == one {
+				from = i
+				break
+			}
+		}
+		if from < 0 {
+			return q2spot.Fail(q2spot.Unavailable, "The list changed: open it again")
+		}
+	}
+	if from >= len(ts) {
+		return q2spot.Fail(q2spot.Unavailable, "Nothing to play")
+	}
+	d.dl.fresh()
+	d.st.start(append([]deezer.Track(nil), ts[from:]...))
+	return q2spot.Reply{Message: "Playing in a moment"}
 }
 
 // download queues a list's songs, or one of them (<list>#<id>).
@@ -629,17 +702,25 @@ func (d *daemon) cardArtists(cursor string) q2spot.Reply {
 	return page(rows, cursor, "")
 }
 
-// albumYear is an album folder's year, "Tender Buttons (2005)"'s 2005; 9999 without one, so those
-// come after the dated ones.
-func albumYear(folder string) int {
-	if m := yearSuffix.FindStringSubmatch(folder); m != nil {
-		y, _ := strconv.Atoi(m[1])
-		return y
+// albumYear is an album folder's title and year: "2005 - Tender Buttons", and v3.2's "Tender Buttons
+// (2005)", are Tender Buttons and 2005; without a year, the name and 9999, so those come after the
+// dated ones.
+func albumYear(folder string) (string, int) {
+	m := yearPrefix.FindStringSubmatch(folder)
+	if m == nil {
+		if m = yearSuffix.FindStringSubmatch(folder); m == nil {
+			return folder, 9999
+		}
+		m[1], m[2] = m[2], m[1]
 	}
-	return 9999
+	y, _ := strconv.Atoi(m[1])
+	return m[2], y
 }
 
-var yearSuffix = regexp.MustCompile(` \(([0-9]{4})\)$`)
+var (
+	yearPrefix = regexp.MustCompile(`^([0-9]{4}) - (.+)$`)
+	yearSuffix = regexp.MustCompile(`^(.+) \(([0-9]{4})\)$`)
+)
 
 // cardAlbums is an artist's folder: each album's, oldest first (then by name), its songs in track
 // order.
@@ -652,12 +733,21 @@ func (d *daemon) cardAlbums(artist, cursor string) q2spot.Reply {
 		return q2spot.Fail(q2spot.Unavailable, "It isn't on the card any more")
 	}
 	loose, albums := songsIn(dir)
-	sort.SliceStable(albums, func(i, j int) bool { return albumYear(albums[i]) < albumYear(albums[j]) })
+	sort.SliceStable(albums, func(i, j int) bool {
+		_, a := albumYear(albums[i])
+		_, b := albumYear(albums[j])
+		return a < b
+	})
 	var rows []q2spot.Row
 	for _, a := range albums {
 		n, _ := songsIn(filepath.Join(dir, a))
-		rows = append(rows, q2spot.Row{Kind: "local", URI: filepath.Join(dir, a) + "/", Context: "album", Title: a,
-			Subtitle: plural(n, "song")})
+		title, year := albumYear(a)
+		sub := plural(n, "song")
+		if year != 9999 {
+			sub = strconv.Itoa(year) + " · " + sub
+		}
+		rows = append(rows, q2spot.Row{Kind: "local", URI: filepath.Join(dir, a) + "/", Context: "album", Title: title,
+			Subtitle: sub})
 	}
 	if loose > 0 {
 		rows = append(rows, q2spot.Row{Kind: "local", URI: dir + "/", Title: "Other Songs", Subtitle: plural(loose, "song")})
@@ -676,9 +766,13 @@ func (d *daemon) menu() q2spot.Reply {
 	if _, dirs := songsIn(d.dl.folder); len(dirs) > 0 { // Artist/Album folders: browsed by them
 		songs.Kind, songs.URI = "list", "cardartists"
 	}
-	org := q2spot.Row{Kind: "action", URI: "organize", Title: "Organize Files: On", Subtitle: "Artist / Album (Year) / 01 - Song"}
+	org := q2spot.Row{Kind: "action", URI: "organize", Title: "Organize Files: On", Subtitle: "Artist / Year - Album / 01 - Song"}
 	if !d.organized() {
 		org.Title, org.Subtitle = "Organize Files: Off", "Every song in one folder, Deezer/"
+	}
+	mode := q2spot.Row{Kind: "action", URI: "mode", Title: "Mode: Download", Subtitle: "A press saves the song in Deezer/"}
+	if d.streaming() {
+		mode.Title, mode.Subtitle = "Mode: Stream", "A press plays the song; nothing is kept"
 	}
 	stop := q2spot.Row{Kind: "action", URI: "stop", Title: "Stop Deezer", Subtitle: "Downloads carry on next time"}
 	queue := d.queueRow()
@@ -705,6 +799,7 @@ func (d *daemon) menu() q2spot.Reply {
 			{Kind: "list", URI: "artists", Title: "Artists"},
 			{Kind: "search", Title: "Search Deezer"},
 			queue,
+			mode,
 			{Kind: "action", URI: "quality", Title: "Quality: " + qualityNames[d.quality()],
 				Subtitle: "Each song in the best there is, up to this"},
 			org,

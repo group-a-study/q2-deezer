@@ -33,6 +33,9 @@ type Track struct {
 	// DISCNUMBER and the ID3 TPE2 / FLAC ALBUMARTIST fields.
 	DiscNumber  int
 	AlbumArtist string
+	// Q2: the song's lyrics as its file embeds them (LyricsTag), which a download fetches just
+	// before it tags the file; never kept in q2-deezer's queue file. Empty: no lyrics tag.
+	Lyrics string `json:"-"`
 }
 
 // ArtistLine joins artist names: "Artist A, Artist B".

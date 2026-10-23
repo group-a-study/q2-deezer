@@ -54,7 +54,7 @@ func TestOrganizeSetting(t *testing.T) {
 		t.Fatalf("no Organize Files row in %q", rows)
 		return nil
 	}
-	if got := row(); got[0] != "action" || got[2] != "Organize Files: On" || got[3] != "Artist / Album (Year) / 01 - Song" {
+	if got := row(); got[0] != "action" || got[2] != "Organize Files: On" || got[3] != "Artist / Year - Album / 01 - Song" {
 		t.Fatalf("default %q", got)
 	}
 	if head, _ := r.ask("organize"); head[1] != "ok" || head[2] != "New downloads go straight in Deezer/" {
@@ -68,7 +68,7 @@ func TestOrganizeSetting(t *testing.T) {
 	if got := row(); got[2] != "Organize Files: Off" { // kept across a restart
 		t.Fatalf("after restart %q", got)
 	}
-	if head, _ := r.ask("organize"); head[2] != "New downloads go in Artist/Album folders" || row()[2] != "Organize Files: On" {
+	if head, _ := r.ask("organize"); head[2] != "New downloads go in Artist/Year - Album folders" || row()[2] != "Organize Files: On" {
 		t.Fatalf("on %q", head)
 	}
 }
@@ -90,7 +90,7 @@ func TestOrganizedDownloads(t *testing.T) {
 		_, rows := r.ask("downloads")
 		return len(rows) > 0 && rows[0][2] == "Try the Failed Again"
 	})
-	cults := filepath.Join("Various Artists", "Witch Cults of the Radio Age (2003)")
+	cults := filepath.Join("Various Artists", "2003 - Witch Cults of the Radio Age")
 	want := []string{filepath.Join(cults, "1-01 - The Be Colony [1].flac"), filepath.Join(cults, "1-03 - Mother Is the Milky Way [2].flac")}
 	if got := r.tree(); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("files %q", got)
@@ -114,7 +114,7 @@ func TestOrganizedDownloads(t *testing.T) {
 	r.ask("clearfailed")
 	// An album: one disc, so no disc in the names; all on the card plays its folder in track order.
 	r.ask("download", "album:7")
-	tender := filepath.Join(r.folder, "Broadcast", "Tender Buttons (2005)")
+	tender := filepath.Join(r.folder, "Broadcast", "2005 - Tender Buttons")
 	waitFor(t, "the album", 5*time.Second, func() bool {
 		_, err := os.Stat(filepath.Join(tender, "02 - Valerie [5].flac"))
 		return err == nil
@@ -123,7 +123,7 @@ func TestOrganizedDownloads(t *testing.T) {
 		t.Fatal(err)
 	}
 	if tags, _, _ := vorbis(t, filepath.Join(tender, "02 - Valerie [5].flac")); tags["TRACKNUMBER"] != "2" ||
-		tags["ALBUMARTIST"] != "Broadcast" || tags["DISCNUMBER"] != "" {
+		tags["ALBUMARTIST"] != "Broadcast" || tags["DISCNUMBER"] != "" || tags["LYRICS"] != "Valerie\nValerie\n" {
 		t.Fatalf("album tags %v", tags)
 	}
 	if _, rows = r.ask("tracks", "album:7"); rows[0][0] != "local" || rows[0][2] != "All on the card" ||
@@ -140,7 +140,8 @@ func TestOrganizedDownloads(t *testing.T) {
 		t.Fatalf("artists %q", rows)
 	}
 	if _, rows = r.ask("cardalbums", "Various Artists"); len(rows) != 1 || rows[0][0] != "local" ||
-		rows[0][1] != filepath.Join(r.folder, cults)+"/" || rows[0][4] != "album" || rows[0][3] != "2 songs" {
+		rows[0][1] != filepath.Join(r.folder, cults)+"/" || rows[0][4] != "album" || rows[0][3] != "2003 · 2 songs" ||
+		rows[0][2] != "Witch Cults of the Radio Age" {
 		t.Fatalf("albums %q", rows)
 	}
 	for _, bad := range []string{"..", "../.deezer", ""} {
@@ -175,24 +176,36 @@ func TestOrganizedDownloads(t *testing.T) {
 	}
 }
 
-// An album's folder from v3.1, without its year, is renamed when the album's next song comes, its
-// songs found at their new paths; an artist's albums list oldest first, undated ones last.
+// v3.2's album folders, "<album> (<year>)", are renamed year first once at start; a v3.1 one,
+// without its year, when the album's next song comes, its songs found at their new paths. An
+// artist's albums list oldest first, undated ones last, each by its title with its year beside.
 func TestOrganizedYearFolders(t *testing.T) {
 	f := newFakeDeezer(t)
 	r := newRigOrganize(t, goodARL, f, "on")
 	r.stop()
 	broadcast := filepath.Join(r.folder, "Broadcast")
+	os.Remove(filepath.Join(r.dir, "layout")) // as a v3.2 card has none
 	for _, p := range []string{"Tender Buttons/01 - Tears in the Typing Pool [4].flac", "Haha Sound (2003)/01 - Pendulum [97].flac",
-		"Work and Non Work/01 - Accidentals [98].flac", "Ha Ha (1999)/01 - Echo's Answer [99].flac"} {
+		"Work and Non Work/01 - Accidentals [98].flac", "Ha Ha (1999)/01 - Echo's Answer [99].flac",
+		"1999 - Ha Ha/02 - Two [96].flac"} {
 		os.MkdirAll(filepath.Dir(filepath.Join(broadcast, p)), 0o755)
 		os.WriteFile(filepath.Join(broadcast, p), plain("x", 64), 0o644)
 	}
 	r.start(f)
+	if _, err := os.Stat(filepath.Join(broadcast, "2003 - Haha Sound", "01 - Pendulum [97].flac")); err != nil {
+		t.Fatal("v3.2's folder not renamed:", err)
+	}
+	if _, err := os.Stat(filepath.Join(broadcast, "Ha Ha (1999)")); err != nil { // its name now taken: left
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.dir, "layout")); string(b) != "year-first\n" {
+		t.Fatalf("layout %q", b)
+	}
 	waitFor(t, "signed in", 5*time.Second, func() bool { return r.d.authState() == authOK })
 	if head, _ := r.ask("download", "album:7"); head[2] != "Downloading 1 song" { // 4 is on the card already
 		t.Fatalf("album %q", head)
 	}
-	tender := filepath.Join(broadcast, "Tender Buttons (2005)")
+	tender := filepath.Join(broadcast, "2005 - Tender Buttons")
 	waitFor(t, "the album", 5*time.Second, func() bool {
 		_, err := os.Stat(filepath.Join(tender, "02 - Valerie [5].flac"))
 		return err == nil
@@ -207,8 +220,21 @@ func TestOrganizedYearFolders(t *testing.T) {
 	if rows[0][1] != tender+"/" || rows[1][1] != filepath.Join(tender, "01 - Tears in the Typing Pool [4].flac") {
 		t.Fatalf("rows %q", rows[:2])
 	}
-	if _, rows = r.ask("cardalbums", "Broadcast"); strings.Join(titlesOf(rows), ",") !=
-		"local Ha Ha (1999),local Haha Sound (2003),local Tender Buttons (2005),local Work and Non Work" {
-		t.Fatalf("albums %q", titlesOf(rows))
+	_, rows = r.ask("cardalbums", "Broadcast")
+	var got []string
+	for _, row := range rows {
+		got = append(got, row[2]+" "+row[3])
 	}
+	if strings.Join(got, ",") != "Ha Ha 1999 · 1 song,Ha Ha 1999 · 1 song,Haha Sound 2003 · 1 song,"+
+		"Tender Buttons 2005 · 2 songs,Work and Non Work 1 song" {
+		t.Fatalf("albums %q", got)
+	}
+	// Once only: a folder named so since is left alone.
+	r.stop()
+	os.MkdirAll(filepath.Join(broadcast, "Mine (2001)"), 0o755)
+	r.start(f)
+	if _, err := os.Stat(filepath.Join(broadcast, "Mine (2001)")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "signed in", 5*time.Second, func() bool { return r.d.authState() == authOK }) // before it stops
 }

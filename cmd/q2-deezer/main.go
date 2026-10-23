@@ -1,8 +1,9 @@
-// q2-deezer is a Q2 Pod card app (contrib/shanlingq2/README) that does Deezer as OpenDeezer does:
-// nothing streams. The Q2 browses the signed-in account's music and Deezer's catalogue on its own
-// page, over Q2SPOT/1, and what it picks is downloaded, decrypted and tagged into Deezer/ on the
-// card by OpenDeezer's client (internal/deezer), in Artist/Album folders unless Organize Files is
-// off; every song then plays from the card, as local music. A paid plan is needed, as for
+// q2-deezer is a Q2 Pod card app (contrib/shanlingq2/README) that does Deezer as OpenDeezer does.
+// The Q2 browses the signed-in account's music and Deezer's catalogue on its own page, over
+// Q2SPOT/1, and what it picks is downloaded, decrypted and tagged into Deezer/ on the card by
+// OpenDeezer's client (internal/deezer), in Artist/Year - Album folders unless Organize Files is
+// off; every song then plays from the card, as local music. In Stream mode (stream.go) a press plays
+// the song instead, fetched into a hidden folder that keeps none. A paid plan is needed, as for
 // OpenDeezer's downloads. It runs from the card's .deezer folder (copied to /tmp first) and is
 // signed in from a phone with the account's arl cookie.
 package main
@@ -29,7 +30,7 @@ import (
 	"github.com/group-a-study/q2-deezer/internal/tlsroots"
 )
 
-const version = "q2-v3.2"
+const version = "q2-v3.3"
 
 // transport carries every request to Deezer: TLS checked against the add-on's own roots, as the
 // firmware has none. Tests answer for Deezer instead.
@@ -54,6 +55,7 @@ type daemon struct {
 	cache   *cache
 	signin  *signin
 	dl      *downloads
+	st      *streamer
 	browse  string
 	control string
 
@@ -62,7 +64,8 @@ type daemon struct {
 	arl  string
 	auth int
 	qual string
-	org  bool      // Organize Files: Artist/Album folders
+	org  bool      // Organize Files: Artist/Year - Album folders
+	strm bool      // Stream mode: a press plays a song, not downloads it
 	used time.Time // the Q2's page, last
 	quit chan struct{}
 	once sync.Once
@@ -98,7 +101,10 @@ func start(dir, folder, statusFile, browse, control string) *daemon {
 		used: time.Now(), quit: make(chan struct{})}
 	d.qual = readQuality(dir)
 	d.org = readOrganize(dir)
+	d.strm = readMode(dir)
 	d.dl = newDownloads(d, folder, filepath.Join(dir, "queue.json"))
+	base := strings.TrimSuffix(statusFile, ".state") // Q2 Pod's names: /tmp/q2-deezer.play, .playing
+	d.st = newStreamer(d, filepath.Join(dir, "stream"), base+".play", base+".playing")
 	d.startSignin(signinPort)
 	d.client() // reads the arl, if the card has one
 	d.writeState()
@@ -132,6 +138,7 @@ func (d *daemon) run() {
 		case <-d.quit:
 			cancel()
 			<-done // the download under way ended, its .part gone; the queue saved
+			d.st.stop()
 			d.state.Remove()
 			os.Remove(d.browse)
 			os.Remove(d.control)
@@ -145,7 +152,7 @@ func (d *daemon) run() {
 			d.mu.Lock()
 			idle := time.Since(d.used)
 			d.mu.Unlock()
-			if !d.dl.pending() && idle > idleFor {
+			if !d.dl.pending() && !d.st.active() && idle > idleFor {
 				log.Printf("idle: stopping")
 				d.shutdown()
 			}
@@ -248,7 +255,7 @@ func (d *daemon) signedIn() {
 // not signed in with a paid plan, the sign-in page's address, PIN and code.
 func (d *daemon) writeState() {
 	hold := "0"
-	if d.dl.busy() {
+	if d.dl.busy() || d.st.busy() {
 		hold = "1"
 	}
 	kv := map[string]string{"hold": hold, "version": version}
@@ -321,6 +328,33 @@ func (d *daemon) setOrganize(on bool) error {
 	}
 	d.mu.Lock()
 	d.org = on
+	d.mu.Unlock()
+	return nil
+}
+
+// Stream mode, .deezer/mode: "stream" plays a pressed song (stream.go); "download" (the default, and
+// anything else) downloads it.
+func readMode(dir string) bool {
+	b, _ := os.ReadFile(filepath.Join(dir, "mode"))
+	return strings.TrimSpace(string(b)) == "stream"
+}
+
+func (d *daemon) streaming() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.strm
+}
+
+func (d *daemon) setMode(stream bool) error {
+	v := "download"
+	if stream {
+		v = "stream"
+	}
+	if err := q2.WriteFile(filepath.Join(d.dir, "mode"), []byte(v+"\n")); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.strm = stream
 	d.mu.Unlock()
 	return nil
 }

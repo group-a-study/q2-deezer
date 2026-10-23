@@ -18,9 +18,9 @@ import (
 )
 
 // The download queue (contrib/shanlingq2/README, Downloads): as OpenDeezer downloads, every track
-// is fetched, decrypted, tagged (title, artist, album, number, year, cover) and renamed into place
-// under Deezer/ on the card: with Organize Files on, in its album's folder,
-// "<album artist>/<album> (<year>)/07 - Title [id].flac", its album, disc and number looked up first
+// is fetched, decrypted, tagged (title, artist, album, number, year, cover, lyrics) and renamed into
+// place under Deezer/ on the card: with Organize Files on, in its album's folder,
+// "<album artist>/<year> - <album>/07 - Title [id].flac", its album, disc and number looked up first
 // (TrackPlacement); off, as OpenDeezer does, in Deezer/ itself as "Title - Artist [id].flac" (or
 // .mp3). The Q2 plays them from there, as local music. One downloads at a time (the Q2's card and
 // CPU); the ones waiting are kept in .deezer/queue.json, so they carry on after a restart or USB
@@ -76,8 +76,55 @@ func newDownloads(d *daemon, folder, file string) *downloads {
 		}
 	}
 	dl.sweep()
+	dl.migrate(filepath.Join(filepath.Dir(file), "layout"))
 	dl.rescan()
 	return dl
+}
+
+// layoutNow is .deezer/layout's word once migrate has renamed v3.2's album folders.
+const layoutNow = "year-first"
+
+// migrate renames, once (.deezer/layout records it), each album folder v3.2 named "<album> (<year>)"
+// to its name now, "<year> - <album>", so an artist's albums list oldest first; one already there
+// is left as it is. v3.1's, without a year, are renamed when their album's next song downloads
+// (place), which knows the year.
+func (dl *downloads) migrate(marker string) {
+	if b, _ := os.ReadFile(marker); strings.TrimSpace(string(b)) == layoutNow || !cardReady() {
+		return
+	}
+	artists, err := os.ReadDir(dl.folder)
+	if err != nil && !os.IsNotExist(err) {
+		return // the card unreadable: next time
+	}
+	moved := 0
+	for _, a := range artists {
+		if !a.IsDir() || strings.HasPrefix(a.Name(), ".") {
+			continue
+		}
+		dir := filepath.Join(dl.folder, a.Name())
+		albums, _ := os.ReadDir(dir)
+		for _, al := range albums {
+			m := yearSuffix.FindStringSubmatch(al.Name())
+			if !al.IsDir() || m == nil {
+				continue
+			}
+			now := deezer.AlbumFolderName(m[1], m[2], "Unknown Album")
+			if _, err := os.Stat(filepath.Join(dir, now)); err == nil {
+				continue
+			}
+			if err := os.Rename(filepath.Join(dir, al.Name()), filepath.Join(dir, now)); err != nil {
+				log.Printf("rename %s: %v", al.Name(), err)
+				continue
+			}
+			moved++
+		}
+	}
+	if moved > 0 {
+		log.Printf("%d album folders renamed year first", moved)
+	}
+	if err := q2.WriteFile(marker, []byte(layoutNow+"\n")); err != nil {
+		log.Printf("layout: %v", err)
+	}
 }
 
 // leftover is a download's or its tagging's temp file (deezer.saveTrack, tagFLAC): "<name>-<n>.flac.part"
@@ -165,12 +212,15 @@ func (dl *downloads) place(dz *deezer.Client, t deezer.Track) (deezer.Track, str
 	}
 	artist := filepath.Join(dl.folder, deezer.FolderName(p.Artist, "Unknown Artist"))
 	dir := filepath.Join(artist, deezer.AlbumFolderName(t.AlbumName, year, "Unknown Album"))
-	dl.renamed(filepath.Join(artist, deezer.FolderName(t.AlbumName, "Unknown Album")), dir)
+	for _, old := range deezer.OldAlbumFolderNames(t.AlbumName, year, "Unknown Album") {
+		dl.renamed(filepath.Join(artist, old), dir)
+	}
 	return t, dir, deezer.OrganizedName(t, p), nil
 }
 
-// renamed moves an album's folder named as v3.1 named them, without its year, to its name now, so
-// the album's songs stay together; the songs on the card read again, at their new paths.
+// renamed moves an album's folder named as an earlier q2-deezer named them (v3.1's without its year,
+// v3.2's with it last) to its name now, so the album's songs stay together; the songs on the card
+// read again, at their new paths.
 func (dl *downloads) renamed(old, now string) {
 	if old == now {
 		return
@@ -521,7 +571,7 @@ func (dl *downloads) next(ctx context.Context) bool {
 		return false
 	default:
 		log.Printf("download %s: %v", it.Track.ID, err)
-		it.Err = reason(err)
+		it.Err = reason(err, dz.Country())
 		dl.mu.Lock()
 		dl.failed = append(dl.failed, it)
 		dl.cur, dl.cancel = nil, nil
@@ -531,10 +581,13 @@ func (dl *downloads) next(ctx context.Context) bool {
 	return true
 }
 
-// reason is a failure as the Q2 shows it.
-func reason(err error) string {
+// reason is a failure as the Q2 shows it; country is the account's, whose licence Deezer goes by.
+func reason(err error, country string) string {
 	switch {
 	case deezer.IsPreviewOnly(err), deezer.IsNoFullMedia(err):
+		if country != "" { // no release of it Deezer may send there (deezer.PrepareStream's fallback)
+			return "not licensed in your Deezer country (" + country + ")"
+		}
 		return "not available in full here"
 	case os.IsPermission(err) || errors.Is(err, os.ErrPermission):
 		return "the card refused it"

@@ -110,8 +110,8 @@ func (f *fakeDeezer) count(what string) int {
 }
 
 var titles = map[string]string{"1": "The Be Colony", "2": "Mother Is the Milky Way", "3": "Ritual Looks",
-	"4": "Tears in the Typing Pool", "5": "Valerie", "6": "Corporeal"}
-var seconds = map[string]int{"1": 30, "2": 20, "3": 10, "4": 10, "5": 10, "6": 10}
+	"4": "Tears in the Typing Pool", "5": "Valerie", "6": "Corporeal", "12": "Snow", "13": "Snow"}
+var seconds = map[string]int{"1": 30, "2": 20, "3": 10, "4": 10, "5": 10, "6": 10, "12": 10, "13": 10}
 
 // cover is a real JPEG, as the image host serves: FLAC's picture block reads its size.
 var cover = func() []byte {
@@ -143,7 +143,8 @@ var album7 = map[string]any{"id": 7, "title": "Tender Buttons", "cover_medium": 
 
 func newFakeDeezer(t *testing.T) *fakeDeezer {
 	f := &fakeDeezer{files: map[string][]byte{}, hold: map[string]chan struct{}{}}
-	for id, n := range map[string]int{"1": 40 << 10, "2": 30 << 10, "3": 15<<10 + 77, "4": 10 << 10, "5": 10 << 10, "6": 9 << 10} {
+	for id, n := range map[string]int{"1": 40 << 10, "2": 30 << 10, "3": 15<<10 + 77, "4": 10 << 10, "5": 10 << 10, "6": 9 << 10,
+		"13": 12 << 10} {
 		f.files[id] = encrypt(id, plain(id, n))
 	}
 	mux := http.NewServeMux()
@@ -186,7 +187,7 @@ func newFakeDeezer(t *testing.T) *fakeDeezer {
 			if free {
 				offers = nil
 			}
-			reply(w, map[string]any{"checkForm": "tok", "OFFERS": offers, "USER": map[string]any{"USER_ID": "42",
+			reply(w, map[string]any{"checkForm": "tok", "OFFERS": offers, "COUNTRY": "TR", "USER": map[string]any{"USER_ID": "42",
 				"BLOG_NAME": "Ana", "OPTIONS": map[string]any{"license_token": "lic", "web_hq": !free, "web_lossless": !free}}})
 		case "deezer.pageProfile":
 			tab, _ := args["tab"].(string)
@@ -204,7 +205,22 @@ func newFakeDeezer(t *testing.T) *fakeDeezer {
 			id, _ := args["sng_id"].(string)
 			tr := gwTrack(id)
 			tr["TRACK_TOKEN"], tr["GAIN"] = "tok"+id, "-8.5"
+			if id == "12" { // not licensed here, as 3; Deezer names 13, the same song on another release
+				tr["FALLBACK"] = map[string]any{"SNG_ID": "13", "ALB_TITLE": "Snow"}
+			}
 			reply(w, tr)
+		case "song.getLyrics": // 2 synced, 5 plain, the rest none
+			switch id, _ := args["sng_id"].(string); id {
+			case "2":
+				reply(w, map[string]any{"LYRICS_TEXT": "Here\r\nThere", "LYRICS_SYNC_JSON": []any{
+					map[string]any{"milliseconds": "1500", "line": "Here"}, map[string]any{"line": ""},
+					map[string]any{"milliseconds": "63010", "line": "There"}}})
+			case "5":
+				reply(w, map[string]any{"LYRICS_TEXT": "Valerie\r\nValerie"})
+			default:
+				json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"DATA_ERROR": "No lyrics id for " + id},
+					"results": map[string]any{}})
+			}
 		case "radio.getUserRadio":
 			reply(w, list("6", "5"))
 		case "smart.getSmartRadio":
@@ -229,7 +245,7 @@ func newFakeDeezer(t *testing.T) *fakeDeezer {
 		}
 		formats := f.formats
 		f.mu.Unlock()
-		if id == "3" { // not available in full in this region: only its preview
+		if id == "3" || id == "12" { // not available in full in this region: only its preview
 			json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]any{"errors": []any{
 				map[string]any{"code": 2002, "message": "Track token has no sufficient rights on requested media"}}}}})
 			return
@@ -532,7 +548,7 @@ func TestSignin(t *testing.T) {
 		t.Fatalf("arl file %q", b)
 	}
 	waitFor(t, "the code gone", 5*time.Second, func() bool { _, has := r.state()["pin"]; return !has })
-	if _, rows := r.ask("menu"); len(rows) != 11 || rows[1][2] != "Liked Songs" {
+	if _, rows := r.ask("menu"); len(rows) != 12 || rows[1][2] != "Liked Songs" {
 		t.Fatalf("menu %q", rows)
 	}
 	if code, _ := post("signout", map[string]string{}); code != 200 {
@@ -572,7 +588,7 @@ func TestDownloads(t *testing.T) {
 	waitFor(t, "signed in", 5*time.Second, func() bool { return r.d.authState() == authOK })
 	head, rows := r.ask("menu")
 	want := "local Downloaded Songs,list Liked Songs,list Playlists,list Albums,list Artists,search Search Deezer," +
-		"list Downloads,action Quality: FLAC,action Organize Files: Off,list Account,action Stop Deezer"
+		"list Downloads,action Mode: Download,action Quality: FLAC,action Organize Files: Off,list Account,action Stop Deezer"
 	if head[2] != "refresh" || strings.Join(titlesOf(rows), ",") != want || rows[0][1] != r.folder+"/" ||
 		rows[0][3] != "0 songs on the card" || rows[1][1] != "tracks" || rows[1][4] != "liked" || rows[1][5] != "download" {
 		t.Fatalf("menu %q", rows)
@@ -594,7 +610,8 @@ func TestDownloads(t *testing.T) {
 	name := "Mother Is the Milky Way - Broadcast [2].flac"
 	waitFor(t, "the file", 5*time.Second, func() bool { return strings.Join(r.downloaded(), ",") == name })
 	tags, pic, frames := vorbis(t, filepath.Join(r.folder, name))
-	if tags["TITLE"] != "Mother Is the Milky Way" || tags["ARTIST"] != "Broadcast" || tags["ALBUM"] != "Witch Cults" || !pic {
+	if tags["TITLE"] != "Mother Is the Milky Way" || tags["ARTIST"] != "Broadcast" || tags["ALBUM"] != "Witch Cults" || !pic ||
+		tags["LYRICS"] != "[00:01.50]Here\n[01:03.01]There\n" { // synced: LRC
 		t.Fatalf("tags %v %v", tags, pic)
 	}
 	if !bytes.Equal(frames, plain("2", 30<<10)[42:]) {
@@ -621,7 +638,7 @@ func TestDownloads(t *testing.T) {
 	}
 	_, rows = r.ask("downloads")
 	if strings.Join(titlesOf(rows), ",") != "action Try the Failed Again,action Clear the Failed,action Ritual Looks,"+
-		"local The Be Colony,local Mother Is the Milky Way" || rows[2][3] != "Failed (not available in full here): press to try again" {
+		"local The Be Colony,local Mother Is the Milky Way" || rows[2][3] != "Failed (not licensed in your Deezer country (TR)): press to try again" {
 		t.Fatalf("downloads %q", rows)
 	}
 	if _, rows = r.ask("tracks", "playlist:99"); rows[3][3] != "Broadcast · failed: press to try again" {
@@ -869,4 +886,141 @@ func TestIdle(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("not stopped when idle")
 	}
+}
+
+// A song not licensed in the account's country downloads from the release Deezer names instead
+// (FALLBACK), decrypted with that one's id, under the song's own name; one without fails, saying why.
+func TestFallback(t *testing.T) {
+	f := newFakeDeezer(t)
+	r := newRig(t, goodARL, f)
+	waitFor(t, "signed in", 5*time.Second, func() bool { return r.d.authState() == authOK })
+	r.d.dl.add([]deezer.Track{{ID: "12", Name: "Snow", Artists: []deezer.Artist{{Name: "Angus & Julia Stone"}}, AlbumName: "Snow"}})
+	name := "Snow - Angus & Julia Stone [12].flac"
+	waitFor(t, "the file", 5*time.Second, func() bool { return strings.Join(r.downloaded(), ",") == name })
+	if _, _, frames := vorbis(t, filepath.Join(r.folder, name)); !bytes.Equal(frames, plain("13", 12<<10)[42:]) {
+		t.Fatal("not the fallback's audio")
+	}
+}
+
+// More…: a list's cursor is the request's last argument, whatever came before it (Q2 Pod up to
+// 1.4.1 sent each page's after the last's).
+func TestCursor(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		n    int
+		want string
+	}{{nil, 0, ""}, {[]string{"30"}, 0, "30"}, {[]string{"30", "60"}, 0, "60"}, {[]string{"album:7"}, 1, ""},
+		{[]string{"album:7", "30"}, 1, "30"}, {[]string{"album:7", "30", "60", "90"}, 1, "90"}} {
+		if got := cursor(q2spot.Request{Args: c.args}, c.n); got != c.want {
+			t.Errorf("cursor(%q, %d) = %q, want %q", c.args, c.n, got, c.want)
+		}
+	}
+	f := newFakeDeezer(t)
+	r := newRig(t, goodARL, f)
+	waitFor(t, "signed in", 5*time.Second, func() bool { return r.d.authState() == authOK })
+	if _, rows := r.ask("playlists", "2", "0"); strings.Join(titlesOf(rows), ",") != "list Flow,list Top Charts,list Haunted" {
+		t.Fatalf("playlists %q", rows)
+	}
+	if _, rows := r.ask("playlists", "0", "2"); strings.Join(titlesOf(rows), ",") != "list Haunted" {
+		t.Fatalf("playlists %q", rows)
+	}
+}
+
+// Stream mode: a press plays the song and the rest of its list after it, fetched into a session's
+// folder in .deezer/stream that Q2 Pod is told of, none of it kept in Deezer/; a new session takes
+// the old one's songs it needs and deletes the rest; a song on the card is copied, not fetched.
+func TestStream(t *testing.T) {
+	f := newFakeDeezer(t)
+	r := newRig(t, goodARL, f)
+	waitFor(t, "signed in", 5*time.Second, func() bool { return r.d.authState() == authOK })
+	if head, _ := r.ask("mode"); head[2] != "A press plays the song; nothing is kept" {
+		t.Fatalf("mode %q", head)
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.dir, "mode")); string(b) != "stream\n" {
+		t.Fatalf("mode file %q", b)
+	}
+	_, rows := r.ask("menu")
+	if strings.Join(titlesOf(rows), ",") != "local Downloaded Songs,list Liked Songs,list Playlists,list Albums,list Artists,"+
+		"search Search Deezer,list Downloads,action Mode: Stream,action Quality: FLAC,action Organize Files: Off,list Account,action Stop Deezer" {
+		t.Fatalf("menu %q", rows)
+	}
+	_, rows = r.ask("tracks", "playlist:99")
+	if strings.Join(titlesOf(rows), ",") != "action Play All,action Download All,action The Be Colony,action Mother Is the Milky Way,action Ritual Looks" ||
+		rows[0][1] != "stream" || rows[0][4] != "playlist:99" || rows[3][1] != "stream" || rows[3][4] != "playlist:99#2" || rows[3][5] != "download" {
+		t.Fatalf("playlist %q", rows)
+	}
+	if head, _ := r.ask("stream", "playlist:99#1"); head[2] != "Playing in a moment" {
+		t.Fatalf("stream %q", head)
+	}
+	play := filepath.Join(r.tmp, "state.play")
+	var seq, dir string
+	waitFor(t, "the play file", 5*time.Second, func() bool {
+		b, _ := os.ReadFile(play)
+		seq, dir, _ = strings.Cut(strings.TrimSpace(string(b)), " ")
+		return dir != ""
+	})
+	if dir != filepath.Join(r.dir, "stream", seq) {
+		t.Fatalf("play %q %q", seq, dir)
+	}
+	waitFor(t, "the songs", 5*time.Second, func() bool { return !r.d.st.active() })
+	files := func(dir string) string {
+		es, _ := os.ReadDir(dir)
+		var names []string
+		for _, e := range es {
+			names = append(names, e.Name())
+		}
+		return strings.Join(names, ",")
+	}
+	if got := files(dir); got != "01 - The Be Colony [1].flac,02 - Mother Is the Milky Way [2].flac" { // 3: a preview only
+		t.Fatalf("session %q", got)
+	}
+	if tags, _, _ := vorbis(t, filepath.Join(dir, "02 - Mother Is the Milky Way [2].flac")); tags["TITLE"] != "Mother Is the Milky Way" ||
+		tags["LYRICS"] == "" {
+		t.Fatalf("tags %v", tags)
+	}
+	if got := r.downloaded(); len(got) != 0 {
+		t.Fatalf("kept %q", got)
+	}
+	// Held, a song downloads; then a new session from it: 2 moved from the old one, 1's copy
+	// made from the card's, the old session gone.
+	r.ask("download", "playlist:99#1")
+	waitFor(t, "the download", 5*time.Second, func() bool { return len(r.downloaded()) == 1 })
+	r.ask("stream", "liked") // 2, then 1
+	waitFor(t, "the new session", 5*time.Second, func() bool {
+		b, _ := os.ReadFile(play)
+		return !strings.HasPrefix(string(b), seq+" ") && !r.d.st.active()
+	})
+	b, _ := os.ReadFile(play)
+	_, dir2, _ := strings.Cut(strings.TrimSpace(string(b)), " ")
+	if got := files(dir2); got != "01 - Mother Is the Milky Way [2].flac,02 - The Be Colony [1].flac" {
+		t.Fatalf("session 2 %q", got)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("the old session left")
+	}
+	lib, _ := os.ReadFile(filepath.Join(r.folder, r.downloaded()[0]))
+	if cp, _ := os.ReadFile(filepath.Join(dir2, "02 - The Be Colony [1].flac")); !bytes.Equal(cp, lib) {
+		t.Fatal("not the card's copy")
+	}
+	// Q2 Pod plays the 8th of a longer session's: those more than 5 before it go.
+	for i := 1; i <= 9; i++ {
+		os.WriteFile(filepath.Join(dir2, fmt.Sprintf("%02d - x [%d].flac", i+10, 90+i)), nil, 0o644)
+	}
+	os.WriteFile(filepath.Join(r.tmp, "state.playing"), []byte(filepath.Join(dir2, "18 - x [98].flac")+"\n"), 0o644)
+	if pos := r.d.st.position(dir2); pos != 17 {
+		t.Fatalf("position %d", pos)
+	}
+	r.d.st.trim(dir2)
+	if got := files(dir2); got != "13 - x [93].flac,14 - x [94].flac,15 - x [95].flac,16 - x [96].flac,17 - x [97].flac,18 - x [98].flac,19 - x [99].flac" {
+		t.Fatalf("trimmed %q", got)
+	}
+	r.stop()
+	if _, err := os.Stat(play); !os.IsNotExist(err) {
+		t.Fatal("the play file left")
+	}
+	r.start(f)
+	if _, rows = r.ask("menu"); rows[7][2] != "Mode: Stream" { // kept
+		t.Fatalf("menu %q", rows[7])
+	}
+	waitFor(t, "signed in", 5*time.Second, func() bool { return r.d.authState() == authOK })
 }

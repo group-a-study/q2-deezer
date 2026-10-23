@@ -511,6 +511,9 @@ func (c *Client) saveTrackAs(ctx context.Context, t Track, dir, base string, pla
 
 	// Best-effort tagging, applied to the temp file before it becomes visible
 	// under the final name. Never fails the download.
+	if t.Lyrics == "" && fetchLyrics { // Q2: the lyrics embedded too, when Deezer has them
+		t.Lyrics = c.LyricsTag(t.ID)
+	}
 	au := upgradeArtworkURL(t.ArtworkURL)
 	if tagErr := tagFile(ctx, tmp, t, au, t.TrackNumber, t.Year, fetch); tagErr != nil {
 		odlog.Warn("download: tagging %s failed (non-fatal, file left as raw audio): %v", path, tagErr)

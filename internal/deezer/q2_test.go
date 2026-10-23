@@ -243,17 +243,42 @@ func TestOrganizedNames(t *testing.T) {
 	if !strings.HasSuffix(long, " [123456789]") || len(long) > 180 || !utf8.ValidString(long) {
 		t.Errorf("long %q (%d bytes)", long, len(long))
 	}
-	for _, c := range [][4]string{{"Tender Buttons", "2005", "Tender Buttons (2005)"}, {"Tender Buttons", "", "Tender Buttons"},
-		{"Tender Buttons", "05", "Tender Buttons"}, {"", "2005", "Unknown (2005)"}, {"AC/DC: Live?", "1992", "AC_DC_ Live_ (1992)"},
-		{strings.Repeat("a", 150), "2005", strings.Repeat("a", 93) + " (2005)"}} {
+	for _, c := range [][4]string{{"Tender Buttons", "2005", "2005 - Tender Buttons"}, {"Tender Buttons", "", "Tender Buttons"},
+		{"Tender Buttons", "05", "Tender Buttons"}, {"", "2005", "2005 - Unknown"}, {"AC/DC: Live?", "1992", "1992 - AC_DC_ Live_"},
+		{strings.Repeat("a", 150), "2005", "2005 - " + strings.Repeat("a", 93)}} {
 		if got := AlbumFolderName(c[0], c[1], "Unknown"); got != c[2] {
 			t.Errorf("AlbumFolderName(%q, %q) = %q, want %q", c[0], c[1], got, c[2])
 		}
+	}
+	if got := OldAlbumFolderNames("AC/DC: Live?", "1992", "Unknown"); strings.Join(got, "|") != "AC_DC_ Live_|AC_DC_ Live_ (1992)" {
+		t.Errorf("OldAlbumFolderNames = %q", got)
+	}
+	if got := OldAlbumFolderNames("Tender Buttons", "", "Unknown"); strings.Join(got, "|") != "Tender Buttons" {
+		t.Errorf("OldAlbumFolderNames, no year = %q", got)
 	}
 	for in, want := range map[string]string{"": "Unknown", " . ": "Unknown", "track": "track", "AC/DC": "AC_DC",
 		"Mr. Bungle.": "Mr. Bungle", " Björk ": "Björk", strings.Repeat("a", 150): strings.Repeat("a", 100)} {
 		if got := FolderName(in, "Unknown"); got != want {
 			t.Errorf("FolderName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Lyrics embed as LRC when Deezer has them in time, its untimed blank lines left out, else as
+// plain text with its line ends tidied.
+func TestLyricsText(t *testing.T) {
+	synced := Lyrics{Plain: "a\r\nb", Synced: []LyricLine{{TimeMS: 1500, Text: "One "}, {Text: ""},
+		{TimeMS: 3_723_456, Text: "Two"}}}
+	if got := LyricsText(synced); got != "[00:01.50]One\n[62:03.45]Two\n" {
+		t.Errorf("synced %q", got)
+	}
+	if got := LyricsText(Lyrics{Plain: "One\r\nTwo\r\n"}); got != "One\nTwo\n" {
+		t.Errorf("plain %q", got)
+	}
+	if got := LyricsText(Lyrics{Plain: "One", Synced: []LyricLine{{Text: " "}}}); got != "One\n" { // no timed line: plain
+		t.Errorf("blank synced %q", got)
+	}
+	if got := LyricsText(Lyrics{}); got != "" {
+		t.Errorf("none %q", got)
 	}
 }

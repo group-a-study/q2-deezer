@@ -163,6 +163,7 @@ type Client struct {
 	offerName    string // e.g. "Deezer Premium", "Deezer Free"
 	canHiFi      bool   // account entitled to lossless
 	canHQ        bool   // account entitled to MP3_320
+	country      string // Q2 Pod: the country Deezer licenses the account's music for ("TR")
 
 	// Free-tier ads / listen logging (see ads.go). adMu guards the cadence state.
 	adMu        sync.Mutex
@@ -319,6 +320,7 @@ func (c *Client) Login() error {
 			Offers []struct {
 				Title string `json:"title"`
 			} `json:"OFFERS"`
+			Country string `json:"COUNTRY"` // Q2 Pod: what Country reports
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
@@ -371,8 +373,17 @@ func (c *Client) Login() error {
 	c.canHQ = canHQ
 	c.canHiFi = canHiFi
 	c.offerName = offerName
+	c.country = parsed.Results.Country
 	c.mu.Unlock()
 	return nil
+}
+
+// Country is the country Deezer licenses the account's music for, "TR", as its sign-in said; "" before
+// one (Q2 Pod: the reason a song unlicensed there can't download).
+func (c *Client) Country() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.country
 }
 
 // Account returns the logged-in user's plan + entitlement summary.
@@ -936,22 +947,30 @@ func (c *Client) Playlists() ([]Playlist, error) {
 // trackToken fetches the per-track token needed for media URL resolution, plus
 // the track's ReplayGain (dB) so playback can be loudness-normalized. GAIN is
 // already present in the song.getData payload, so this costs no extra request.
-func (c *Client) trackToken(trackID string) (token string, gainDB float64, err error) {
+// Q2 Pod: fallback is the id of the same song on another release (FALLBACK), which
+// Deezer names for a track not licensed in the account's country, "" without one.
+func (c *Client) trackToken(trackID string) (token string, gainDB float64, fallback string, err error) {
 	b, err := c.gw("song.getData", fmt.Sprintf(`{"sng_id":%s}`, jsonEsc(trackID)))
 	if err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
 	var r struct {
 		Results struct {
 			TrackToken string      `json:"TRACK_TOKEN"`
 			Gain       json.Number `json:"GAIN"`
+			Fallback   struct {
+				ID json.Number `json:"SNG_ID"`
+			} `json:"FALLBACK"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(b, &r); err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
 	g, _ := strconv.ParseFloat(r.Results.Gain.String(), 64)
-	return r.Results.TrackToken, g, nil
+	if fallback = r.Results.Fallback.ID.String(); fallback == trackID || fallback == "0" {
+		fallback = ""
+	}
+	return r.Results.TrackToken, g, fallback, nil
 }
 
 // StreamPlan is the resolved CDN URL + track id for decryption.
@@ -1144,9 +1163,22 @@ func (c *Client) PrepareStream(trackID string) (*StreamPlan, error) {
 	if !c.LoggedIn() {
 		return nil, fmt.Errorf("not logged in")
 	}
-	tok, gain, err := c.trackToken(trackID)
+	tok, gain, fallback, err := c.trackToken(trackID)
 	if err == nil && tok != "" {
 		u, format, mErr := c.resolveMediaURL(tok)
+		// Q2 Pod: the account's country has no licence for this release of the song; Deezer names the
+		// same song on another release (an album's other edition) that it may have, which deemix and
+		// Deezer's own apps play instead. Its audio is decrypted with its own id.
+		if errors.Is(mErr, ErrNoFullMedia) && fallback != "" {
+			if ftok, _, _, ferr := c.trackToken(fallback); ferr == nil && ftok != "" {
+				if fu, fformat, ferr := c.resolveMediaURL(ftok); ferr == nil {
+					return &StreamPlan{
+						CDNURL: fu, TrackID: fallback, Format: fformat, GainDB: gain, Encrypted: true,
+						Refresh: func() (*StreamPlan, error) { return c.PrepareStream(trackID) },
+					}, nil
+				}
+			}
+		}
 		if mErr == nil {
 			// Refresh re-resolves a fresh signed URL for the same track when the
 			// CDN token expires mid-download; PrepareStream already retries the

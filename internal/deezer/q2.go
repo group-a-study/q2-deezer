@@ -201,15 +201,29 @@ func FolderName(s, unknown string) string {
 	return sanitizeFilename(truncateSafe(strings.TrimSpace(s), 100))
 }
 
-// AlbumFolderName is an album's folder: its title (FolderName's) and its year, "Tender Buttons
-// (2005)", as Plex, Jellyfin and Navidrome name them; the title is cut first, so the year stays.
-// Without a year (four digits), the title alone.
+// AlbumFolderName is an album's folder: its year first, then its title (FolderName's), "2005 -
+// Tender Buttons", so an artist's folder lists its albums oldest first wherever it is browsed by
+// name (the Q2's Folder view, a computer); the title is cut first, so the year stays. Without a
+// year (four digits), the title alone. Players that read tags (Navidrome, Plex, Jellyfin) take the
+// album and year from the tags, not the folder.
 func AlbumFolderName(album, year, unknown string) string {
-	if len(year) != 4 || strings.Trim(year, "0123456789") != "" {
+	if !isYear(year) {
 		return FolderName(album, unknown)
 	}
-	return FolderName(truncateSafe(strings.TrimSpace(album), 100-len(" (0000)")), unknown) + " (" + year + ")"
+	return year + " - " + FolderName(truncateSafe(strings.TrimSpace(album), 100-len("0000 - ")), unknown)
 }
+
+// OldAlbumFolderNames are the names earlier q2-deezers gave AlbumFolderName's folder: v3.2's title and
+// year, "Tender Buttons (2005)", and v3.1's title alone.
+func OldAlbumFolderNames(album, year, unknown string) []string {
+	names := []string{FolderName(album, unknown)}
+	if isYear(year) {
+		names = append(names, FolderName(truncateSafe(strings.TrimSpace(album), 100-len(" (0000)")), unknown)+" ("+year+")")
+	}
+	return names
+}
+
+func isYear(s string) bool { return len(s) == 4 && strings.Trim(s, "0123456789") == "" }
 
 // FavoriteAlbums lists the user's saved albums (gw pageProfile, as Playlists).
 func (c *Client) FavoriteAlbums() ([]Album, error) {
@@ -306,4 +320,42 @@ func (c *Client) AlbumInfo(id string) (Album, string, error) {
 		return Album{}, "", err
 	}
 	return a.toAlbum(), yearFromDate(a.ReleaseDate), nil
+}
+
+// fetchLyrics is whether a download asks Deezer for the song's lyrics to embed; tests that answer
+// for Deezer without them turn it off.
+var fetchLyrics = true
+
+// LyricsTag is a song's lyrics as a file embeds them (FLAC LYRICS, ID3 USLT): time-synced ones as
+// LRC, a "[mm:ss.xx]" stamp before each line, which the Q2 (Q2 Pod), Navidrome and most players
+// show in time; else the plain text. "" when Deezer has none (or can't be asked).
+func (c *Client) LyricsTag(id string) string {
+	l, err := c.Lyrics(id)
+	if err != nil || l == nil {
+		return ""
+	}
+	return LyricsText(*l)
+}
+
+// LyricsText is l as LyricsTag embeds it, its lines ending in "\n".
+func LyricsText(l Lyrics) string {
+	var b strings.Builder
+	if len(l.Synced) > 0 {
+		for _, line := range l.Synced {
+			text := strings.TrimSpace(line.Text)
+			if text == "" { // Deezer's separators, {"line": ""}, have no time
+				continue
+			}
+			ms := max(line.TimeMS, 0)
+			fmt.Fprintf(&b, "[%02d:%02d.%02d]%s\n", ms/60000, ms/1000%60, ms/10%100, text)
+		}
+		if b.Len() > 0 {
+			return b.String()
+		}
+	}
+	text := strings.TrimSpace(strings.ReplaceAll(l.Plain, "\r\n", "\n"))
+	if text == "" {
+		return ""
+	}
+	return text + "\n"
 }

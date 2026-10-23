@@ -87,6 +87,7 @@ func TestTagFile_WritesID3v24AndCover(t *testing.T) {
 		Name:      "Test Song",
 		Artists:   []Artist{{Name: "Artist A"}, {Name: "Artist B"}},
 		AlbumName: "Test Album",
+		Lyrics:    "[00:01.50]Ünë\n", // Q2
 	}
 	fakeArt := makeTestJPEG()
 	fetch := func(context.Context, string) ([]byte, error) { return fakeArt, nil }
@@ -112,6 +113,10 @@ func TestTagFile_WritesID3v24AndCover(t *testing.T) {
 	}
 	if got := tag.Year(); got != "2026-03-04" {
 		t.Errorf("date/year = %q", got)
+	}
+	if fs := tag.GetFrames(tag.CommonID("Unsynchronised lyrics/text transcription")); len(fs) != 1 ||
+		fs[0].(id3v2.UnsynchronisedLyricsFrame).Lyrics != "[00:01.50]Ünë\n" { // Q2: USLT, UTF-8
+		t.Errorf("USLT = %v", fs)
 	}
 	trck := tag.GetTextFrame(tag.CommonID("Track number/Position in set"))
 	if trck.Text != "12" {

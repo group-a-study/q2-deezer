@@ -48,23 +48,31 @@ minute, runs it at nice 10 (playback and the Q2's pages first), and leaves its p
 A TERM to it ends q2-deezer cleanly: the song under way is dropped (its .part removed) and the
 queue saved. Q2 Pod sends it for Stop Streaming Services, Home's Rockbox row, an Apps update or
 remove, and USB storage (after which it starts it again). With nothing to download and its page
-unused for 15 minutes, q2-deezer stops by itself.
+unused for 15 minutes, q2-deezer stops by itself; a stream session waiting for the Q2 to play on
+keeps it going (for an hour without the Q2 moving on).
 
   /tmp/q2-deezer.state
-      hold=1 while a song downloads (Q2 Pod holds standby off) and version; while not signed in
+      hold=1 while a song downloads or streams in (Q2 Pod holds standby off) and version; while not signed in
       with a paid plan, also the sign-in page's addr, pin, qr, qrsize and note, for Q2 Pod's QR code
       page
   /tmp/q2-deezer.sock
       datagrams: q quits
   /tmp/q2-deezer.browse.sock
       Q2SPOT/1 (q2-pod's docs/librespot.md) for the Q2's page, below
+  /tmp/q2-deezer.play, /tmp/q2-deezer.playing
+      Stream mode (below): "<seq> <folder>", the session Q2 Pod plays; and the path of the song it
+      plays from it, which Q2 Pod writes
   port 8090 (the next free one if taken)
       the sign-in page: /?k=KEY signs a browser in (the key is the QR code's, new each start),
       POST /api/login takes the PIN, POST /api/arl checks and saves an arl, POST /api/signout
       removes it; posts need the header X-Q2: 1
-  .deezer/arl, .deezer/quality, .deezer/organize, .deezer/queue.json
-      the sign-in, Quality (flac, mp3_320, mp3_128), Organize Files (on, off) and the songs waiting;
-      updates keep them
+  .deezer/arl, .deezer/quality, .deezer/organize, .deezer/mode, .deezer/queue.json
+      the sign-in, Quality (flac, mp3_320, mp3_128), Organize Files (on, off), Mode (download,
+      stream) and the songs waiting; updates keep them
+  .deezer/layout
+      year-first once v3.2's album folders were renamed (Downloads)
+  .deezer/stream/<seq>/
+      Stream mode's songs, none kept past the next session
 
 The arl is the account's sign-in: treat it like a password. One line in .deezer/arl, put there by
 hand, works too. An arl lasts months; when Deezer stops taking it, the page asks to sign in again. A
@@ -84,33 +92,38 @@ the card (a song: its folder from it; a folder ending /: its songs listed; conte
 order), info does nothing. A row's position is the op Play/Pause held sends.
 
   menu
-      Downloaded Songs, Liked Songs, Playlists, Albums, Artists, Search Deezer, Downloads, Quality,
-      Organize Files, Account, Stop Deezer; signed out, Sign In from Your Phone. From the sign-in
-      as last found (it never waits on Deezer); refresh
+      Downloaded Songs, Liked Songs, Playlists, Albums, Artists, Search Deezer, Downloads, Mode,
+      Quality, Organize Files, Account, Stop Deezer; signed out, Sign In from Your Phone. From the
+      sign-in as last found (it never waits on Deezer); refresh
   playlists, albums, artists
       list rows: tracks <list> (Play/Pause held: download <list>), or artist <id>
   artist <id>
       Top Songs, Artist Mix, the albums, the similar artists
   tracks <list>
-      Download All (or All on the card), then each song: local when on the card, else
-      download <list>#<id>; refresh
+      Download All (or All on the card; in Stream mode Play All, stream <list>, first), then each
+      song: local when on the card, else download <list>#<id>, or in Stream mode stream
+      <list>#<id> (Play/Pause held still downloads); refresh
   search <term>, found <kind>:<term>
       the four kinds of one search (OpenDeezer's Search), kept two minutes
   download <list> or <list>#<id>
       queues the list's songs not on the card (or that one); its message says how many
+  stream <list> or <list>#<id>
+      plays the list from its first song (or that one) in a new stream session
   downloads
       the queue; cancel <id>, cancelall, retry [<id>], clearfailed
   cardartists, cardalbums <artist>
       Downloaded Songs with Artist/Album folders on the card: the songs in Deezer/ itself
       (Unsorted Songs), then each artist's folder; an artist's albums, oldest first, each a local
       folder row with context album
-  quality, organize, account, signout, stop
-      the next Quality; Organize Files on or off; the account and Sign Out; the arl removed; the
-      app stopped
+  mode, quality, organize, account, signout, stop
+      Mode download or stream; the next Quality; Organize Files on or off; the account and Sign
+      Out; the arl removed; the app stopped
 
 Lists of songs are named liked, flow, chart, playlist:<id>, album:<id>, artistmix:<id>,
 artisttop:<id> and search:<term>; they are fetched whole (OpenDeezer's paging) and kept two minutes,
-so a download takes the songs as the page showed them. Cursors are offsets. A request waits at most
+so a download takes the songs as the page showed them. Cursors are offsets, read from a request's
+last argument: Q2 Pod up to 1.4.1 sent each More… with the cursors of the pages before it too
+("albums 30 60"), which read from the first showed the second page again. A request waits at most
 8 s for its list (Q2 Pod waits 15 s): a list still coming (a 2,320-song playlist is 12 of Deezer's
 pages) answers one info row, Loading..., with the message refresh, so the page asks again every 2 s
 while the one fetch carries on; a list past its two minutes is shown as kept while it is fetched
@@ -123,30 +136,69 @@ Downloads
 
 As OpenDeezer's SaveTrack: for each song the client asks the gateway for its token and the media
 service for its file in the best format at or below Quality that the account has (BF_CBC_STRIPE:
-every third 2048-byte chunk Blowfish-CBC encrypted with a key from the track's id). The file is
+every third 2048-byte chunk Blowfish-CBC encrypted with a key from the track's id). Deezer licenses
+music per country (the account's, which its sign-in names: an account made in Turkey is TR wherever
+it is used), and some releases aren't licensed in every one: Angus & Julia Stone's Snow, album
+952190521, is licensed only in Australia and New Zealand. For such a song the gateway names the
+same song on another release (FALLBACK: Snow's international edition, album 48029042), which is
+fetched instead, as deemix and Deezer's own apps do; its audio is decrypted with its own id, and the
+file keeps the song's own name and tags. A song with neither fails, "not licensed in your Deezer
+country (TR)". The file is
 fetched to a temporary <name>-<n>.flac.part beside its name (a dropped connection resumed with an
 HTTP range and If-Range, a CDN address that expires mid-file resolved again, a file short of its
-length refused), decrypted as it arrives, tagged, then renamed into place. One song downloads at a
+length refused), decrypted as it arrives, tagged, then renamed into place. The tags include the song's lyrics when
+Deezer has them (song.getLyrics, one more request): time-synced ones as LRC, "[01:03.01]A line" a
+line, else the plain text, in a FLAC's LYRICS and an MP3's USLT (UTF-8, language XXX), both of
+which TagLib reads as LYRICS: Q2 Pod shows them in Now Playing (in time from 1.4.2, group-a-study's
+fork), as do Navidrome and most players. One song downloads at a
 time. Offline, signed out or with the card away, the queue waits and tries again every 30 s.
 
 Organize Files on (the default, .deezer/organize missing or anything but "off"): before a song
 downloads, the public API is asked where it sits (/track/<id>: its album, disc and number) and,
 once per album, the album's artist, title and year (/album/<id>) and its discs (/album/<id>/tracks).
-The song goes in Deezer/<album artist>/<album> (<year>)/ as "07 - Title [id].flac" (the album folder
-named as Plex, Jellyfin and Navidrome expect; an album without a year, its title alone): "2-07 - ..." on an album
+The song goes in Deezer/<album artist>/<year> - <album>/ as "07 - Title [id].flac" (the year first,
+so an artist's albums sort oldest first wherever they are listed by name; an album without a year,
+its title alone): "2-07 - ..." on an album
 of more than one disc, three digits on an album of 100 tracks or more, so a folder's names sort in
 track order. Names are cut to 180 bytes and folders to 100, and the characters a FAT card refuses
 (< > : " / \ | ? * and control characters, a trailing dot or space) are replaced. The tags gain the
 number, the disc (on albums of more than one) and the album artist, so the Q2's Library orders the
 album too. A lookup that fails but for the network files the song by what it has (its artist and
-album; no number); a failed download removes the folders it made, when empty.
+album; no number); a failed download removes the folders it made, when empty. Navidrome, Plex and
+Jellyfin group by the tags (album, album artist, date), so the folders' names don't matter to them.
+
+v3.2 named album folders "<album> (<year>)", v3.1 "<album>". At its first start q2-deezer v3.3
+renames each v3.2 folder to "<year> - <album>" (one whose new name is taken is left), then writes
+.deezer/layout so it never does again; a v3.1 one, whose year only a lookup knows, is renamed when
+its album's next song downloads, as is a v3.2 one left over. Library -> Update Local Music then
+finds the songs at their new paths.
 
 Organize Files off: every song in Deezer/ itself as "Title - Artist [id].flac", OpenDeezer's name.
 
 Either way the [id] at the end of a name is how q2-deezer knows a song is on the card: it reads
 Deezer/ and the folders under it (hidden ones skipped) at its start, and again when the page asks
 for a list a minute or more after the last read, so songs downloaded either way, or moved by hand
-within Deezer/, are found.
+within Deezer/, are found. Downloaded Songs lists an artist's albums oldest first, each by its
+title with its year beside.
+
+Stream mode
+-----------
+
+Mode: Stream (.deezer/mode "stream"; Download is the default): a press on a song plays it and the
+rest of its list after it, Play All the list from its start, and nothing is kept in Deezer/. It
+needs a Q2 Pod with stream support (group-a-study/q2-pod 1.4.2 or later), which plays what the app
+names. A session is a folder, .deezer/stream/<seq>/ (seq: the start's time in ms), holding the
+list's songs from the pressed one, at most 200, named in play order ("01 - Title [id].flac",
+three digits for 100 or more), each fetched, decrypted and tagged as a download is (a song already
+downloaded is copied from Deezer/ instead). /tmp/q2-deezer.play names the session, "<seq> <folder>".
+Q2 Pod plays the folder from its first song once one is there, adds each later song to the end of
+that queue as it comes (as Add to Queue), and writes the path of the song playing to
+/tmp/q2-deezer.playing. The session fetches up to two songs past that one (past the first, before
+the Q2 plays any), then waits for the Q2 to move on, deleting songs more than five before the one
+playing; it ends after an hour without the Q2 moving on. A new session (another press) first moves
+in the old sessions' songs it needs, renamed, and deletes the old ones. A song Deezer won't send is
+left out; one that fails for the network is tried again (every 5 s, up to five times). .deezer is
+a hidden folder, which Q2 Pod's library scan skips, so streamed songs never join the Library.
 
 A song Deezer won't give the account in full (only its 30-second preview) fails, as OpenDeezer
 refuses to save a preview under a full song's name. The song under way is counted in queue.json
@@ -165,15 +217,17 @@ OpenDeezer's files over it, with these differences:
                through the app's TLS roots), FavoriteAlbums and FavoriteArtists, AlbumInfo,
                SaveTrackInfo and SaveTrackInfoAs (SaveTrack for a song already looked up, the
                latter with its file's name given), TrackPlacement, OrganizedName and FolderName
-  models.go    Track's DiscNumber and AlbumArtist, which Organize Files fills in
+  models.go    Track's DiscNumber and AlbumArtist, which Organize Files fills in, and Lyrics (LyricsTag)
   tags.go      a FLAC is tagged without holding its audio: only the metadata blocks are read and the
                audio copied across (OpenDeezer's ParseFile and Marshal built the whole file in
                memory, which ran the Q2, without swap, out of memory); DISCNUMBER/TPOS and
-               ALBUMARTIST/TPE2 when known
+               ALBUMARTIST/TPE2 when known; LYRICS/USLT
   download.go  a FLAC's temporary file keeps its extension (<name>-*.flac.part), as tagFile goes by
                it; saveTrackAs, saveTrack with the file's name given
-  client.go    no PrepareStreamCached (nothing streams here); its HTTP client on UseTransport's
+  client.go    no PrepareStreamCached (nothing streams here); its HTTP client on UseTransport's;
+               the account's COUNTRY (Country); PrepareStream follows song.getData's FALLBACK
+               when the song itself isn't licensed for the account
 
 OpenDeezer's internal/log is internal/log, writing to the app's log in /tmp (debug lines only with
-Q2_DEBUG set). The rest (lyrics, podcasts, playlist editing, ISRC lookup, the batch SaveAlbum and
+Q2_DEBUG set). The rest (podcasts, playlist editing, ISRC lookup, the batch SaveAlbum and
 SavePlaylist) is there, unused.

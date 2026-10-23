@@ -118,6 +118,10 @@ func tagMP3(path string, t Track, art []byte, trackNumber int, date string) (err
 	if t.AlbumArtist != "" { // Q2
 		tag.AddTextFrame(tag.CommonID("Band/Orchestra/Accompaniment"), id3v2.EncodingUTF8, t.AlbumArtist)
 	}
+	if t.Lyrics != "" { // Q2: USLT, which TagLib (the Q2's, Navidrome's) reads as LYRICS; "XXX", no language
+		tag.AddUnsynchronisedLyricsFrame(id3v2.UnsynchronisedLyricsFrame{Encoding: id3v2.EncodingUTF8,
+			Language: "XXX", Lyrics: t.Lyrics})
+	}
 	if len(art) > 0 {
 		pic := id3v2.PictureFrame{
 			Encoding:    id3v2.EncodingUTF8,
@@ -193,6 +197,9 @@ func tagFLAC(path string, t Track, art []byte, trackNumber int, date string) err
 	}
 	if date != "" {
 		add(flacvorbis.FIELD_DATE, date)
+	}
+	if t.Lyrics != "" { // Q2
+		add("LYRICS", t.Lyrics)
 	}
 	if addErr != nil {
 		return fmt.Errorf("flac vorbis comment: %w", addErr)
