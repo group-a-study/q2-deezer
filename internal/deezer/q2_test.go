@@ -1,0 +1,252 @@
+package deezer
+
+import (
+	"bytes"
+	"context"
+	"crypto/cipher"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+	"unicode/utf8"
+
+	"github.com/go-flac/flacvorbis"
+	flac "github.com/go-flac/go-flac"
+	"golang.org/x/crypto/blowfish"
+)
+
+// Q2 Pod's additions (q2.go): the favourites, an album's details, and a looked-up track's download.
+
+func TestFavorites(t *testing.T) {
+	c := New("dummy")
+	loggedInPremium(c)
+	c.mu.Lock()
+	c.userID = "42"
+	c.mu.Unlock()
+	var bodies []string
+	c.http = &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		var sb strings.Builder
+		from, n := 0, 100
+		if strings.Contains(string(b), `"index":100`) {
+			from, n = 100, 3
+		}
+		if strings.Contains(string(b), `"tab":"albums"`) {
+			sb.WriteString(`{"error":{},"results":{"TAB":{"albums":{"data":[`)
+			for i := from; i < from+n; i++ {
+				if i > from {
+					sb.WriteByte(',')
+				}
+				fmt.Fprintf(&sb, `{"ALB_ID":"%d","ALB_TITLE":"Album %d","ART_ID":7,"ART_NAME":"Broadcast","ALB_PICTURE":"p%d"}`, i, i, i)
+			}
+		} else {
+			sb.WriteString(`{"error":{},"results":{"TAB":{"artists":{"data":[`)
+			fmt.Fprintf(&sb, `{"ART_ID":"9","ART_NAME":"Stereolab","NB_FAN":"1200"}`)
+		}
+		sb.WriteString(`]}}}}`)
+		return jsonResponse([]byte(sb.String())), nil
+	})}
+	albums, err := c.FavoriteAlbums()
+	if err != nil || len(albums) != 103 || albums[102].Name != "Album 102" || albums[0].Artists[0].Name != "Broadcast" ||
+		albums[0].ArtworkURL != gwCover("p0") {
+		t.Fatalf("albums %d %v %+v", len(albums), err, albums[:1])
+	}
+	if !strings.Contains(bodies[0], `"user_id":"42"`) || !strings.Contains(bodies[1], `"index":100`) {
+		t.Fatalf("bodies %q", bodies)
+	}
+	artists, err := c.FavoriteArtists()
+	if err != nil || len(artists) != 1 || artists[0].ID != "9" || artists[0].NbFans != 1200 {
+		t.Fatalf("artists %+v %v", artists, err)
+	}
+}
+
+// Deezer's pageProfile sends the whole tab whatever nb and index ask, with its total (an account
+// with 239 albums, 141 playlists and 234 artists, 2026-10-22): one request, not one per 100 until
+// a short page that never comes. Without a total, a second page bringing nothing new ends it; an
+// empty profile's TAB is [].
+func TestProfileWholeTab(t *testing.T) {
+	c := New("dummy")
+	loggedInPremium(c)
+	calls, total, empty := 0, true, false
+	c.http = &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		b, _ := io.ReadAll(r.Body)
+		calls++
+		if empty {
+			return jsonResponse([]byte(`{"error":[],"results":{"TAB":[],"DATA":{}}}`)), nil
+		}
+		tab := "albums"
+		if strings.Contains(string(b), `"tab":"playlists"`) {
+			tab = "playlists"
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, `{"error":[],"results":{"TAB":{"%s":{"data":[`, tab)
+		for i := 0; i < 239; i++ {
+			if i > 0 {
+				sb.WriteByte(',')
+			}
+			if tab == "albums" {
+				fmt.Fprintf(&sb, `{"ALB_ID":"%d","ALB_TITLE":"Album %d","ART_ID":"7","ART_NAME":"Broadcast","ALB_PICTURE":"p"}`, 1000+i, i)
+			} else {
+				fmt.Fprintf(&sb, `{"PLAYLIST_ID":"%d","TITLE":"Pl %d","NB_SONG":12,"PLAYLIST_PICTURE":"p"}`, 1000+i, i)
+			}
+		}
+		sb.WriteString(`]`)
+		if total {
+			sb.WriteString(`,"count":239,"total":239`)
+		}
+		fmt.Fprintf(&sb, `},"%s_suggest":{"data":[],"count":0,"total":0}}}}`, tab)
+		return jsonResponse([]byte(sb.String())), nil
+	})}
+	albums, err := c.FavoriteAlbums()
+	if err != nil || len(albums) != 239 || albums[238].Name != "Album 238" || calls != 1 {
+		t.Fatalf("albums: %d, %v, %d requests", len(albums), err, calls)
+	}
+	calls = 0
+	pls, err := c.Playlists()
+	if err != nil || len(pls) != 239 || pls[0].TrackCount != 12 || calls != 1 {
+		t.Fatalf("playlists: %d, %v, %d requests", len(pls), err, calls)
+	}
+	calls, total = 0, false
+	if albums, err = c.FavoriteAlbums(); err != nil || len(albums) != 239 || calls != 2 {
+		t.Fatalf("albums without a total: %d, %v, %d requests", len(albums), err, calls)
+	}
+	calls, empty = 0, true
+	if albums, err = c.FavoriteAlbums(); err != nil || len(albums) != 0 || calls != 1 {
+		t.Fatalf("no albums: %d, %v, %d requests", len(albums), err, calls)
+	}
+}
+
+func TestAlbumInfo(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/album/302127" {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		io.WriteString(w, `{"id":302127,"title":"Discovery","cover_medium":"https://x/250x250.jpg","release_date":"2001-03-07","artist":{"id":27,"name":"Daft Punk"}}`)
+	}))
+	defer ts.Close()
+	c := New("dummy")
+	c.restURLOverride = ts.URL
+	a, year, err := c.AlbumInfo("302127")
+	if err != nil || a.Name != "Discovery" || a.ArtworkURL != "https://x/250x250.jpg" || a.Artists[0].Name != "Daft Punk" || year != "2001" {
+		t.Fatalf("%+v %q %v", a, year, err)
+	}
+}
+
+// SaveTrackInfo keeps SaveTrack's gate: signed in, with a paid plan.
+func TestSaveTrackInfoGate(t *testing.T) {
+	c := New("dummy")
+	if _, err := c.SaveTrackInfo(context.Background(), Track{ID: "1"}, t.TempDir()); err == nil || !strings.Contains(err.Error(), "not logged in") {
+		t.Fatalf("signed out: %v", err)
+	}
+	c.mu.Lock()
+	c.apiToken = "tok"
+	c.mu.Unlock()
+	if _, err := c.SaveTrackInfo(context.Background(), Track{ID: "1"}, t.TempDir()); !errors.Is(err, ErrPremiumRequired) {
+		t.Fatalf("free: %v", err)
+	}
+}
+
+// A FLAC download is tagged as a FLAC: Vorbis comments in its metadata, the audio as decrypted,
+// the file still starting fLaC (OpenDeezer's temp name lost the extension tagFile goes by, so it
+// was tagged as an MP3: an ID3 tag before fLaC).
+func TestSaveTrackFLACTagged(t *testing.T) {
+	audio := append([]byte("fLaC"), 0x80, 0, 0, 34)
+	audio = append(audio, make([]byte, 34)...)
+	audio = append(audio, 0xff, 0xf8) // a frame's sync code
+	for i := 0; len(audio) < 9000; i++ {
+		audio = append(audio, byte(i*7))
+	}
+	enc := append([]byte(nil), audio...)
+	blk, _ := blowfish.NewCipher(BlowfishKey("77"))
+	for i := 0; i+chunkSize <= len(enc); i += chunkSize {
+		if (i/chunkSize)%3 == 0 {
+			cipher.NewCBCEncrypter(blk, stripeIV).CryptBlocks(enc[i:i+chunkSize], enc[i:i+chunkSize])
+		}
+	}
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "x", time.Time{}, bytes.NewReader(enc))
+	}))
+	defer cdn.Close()
+	c := New("dummy")
+	c.mu.Lock()
+	c.apiToken, c.licenseToken, c.userID, c.canHQ, c.canHiFi = "tok", "lic", "42", true, true
+	c.mu.Unlock()
+	c.SetQuality(QualityLossless)
+	c.http = &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "gw-light.php") {
+			return jsonResponse([]byte(`{"error":{},"results":{"TRACK_TOKEN":"t77","GAIN":"0"}}`)), nil
+		}
+		return jsonResponse([]byte(`{"data":[{"media":[{"format":"FLAC","sources":[{"url":"` + cdn.URL + `/77"}]}]}]}`)), nil
+	})}
+	dir := t.TempDir()
+	tr := Track{ID: "77", Name: "Pendulum", Artists: []Artist{{Name: "Broadcast"}}, AlbumName: "Haha Sound", TrackNumber: 3, Year: "2003"}
+	path, err := c.SaveTrackInfo(context.Background(), tr, dir)
+	if err != nil || filepath.Base(path) != "Pendulum - Broadcast [77].flac" {
+		t.Fatalf("%s %v", path, err)
+	}
+	f, err := flac.ParseFile(path)
+	if err != nil {
+		b, _ := os.ReadFile(path)
+		t.Fatalf("not a FLAC: %v (%q)", err, b[:8])
+	}
+	tags := map[string]string{}
+	for _, m := range f.Meta {
+		if m.Type == flac.VorbisComment {
+			vc, _ := flacvorbis.ParseFromMetaDataBlock(*m)
+			for _, kv := range vc.Comments {
+				k, v, _ := strings.Cut(kv, "=")
+				tags[k] = v
+			}
+		}
+	}
+	if tags["TITLE"] != "Pendulum" || tags["ALBUM"] != "Haha Sound" || tags["TRACKNUMBER"] != "3" || tags["DATE"] != "2003" {
+		t.Fatalf("tags %v", tags)
+	}
+	if !bytes.Equal([]byte(f.Frames), audio[42:]) {
+		t.Fatal("the audio isn't the decrypted stream")
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, "*.part")); len(left) > 0 {
+		t.Fatalf("left %v", left)
+	}
+}
+
+// The organized layout's names: numbered in track order, the [id] kept however long the title, and
+// nothing a FAT card refuses.
+func TestOrganizedNames(t *testing.T) {
+	tr := Track{ID: "42", Name: "Song"}
+	for _, c := range []struct {
+		p    Placement
+		want string
+	}{
+		{Placement{Number: 7}, "07 - Song [42]"},
+		{Placement{Number: 7, Disc: 2, Discs: 2}, "2-07 - Song [42]"},
+		{Placement{Number: 7, Disc: 1, Discs: 1}, "07 - Song [42]"},
+		{Placement{Number: 7, Tracks: 120}, "007 - Song [42]"},
+		{Placement{Number: 104, Tracks: 120}, "104 - Song [42]"},
+		{Placement{}, "Song [42]"},
+	} {
+		if got := OrganizedName(tr, c.p); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.p, got, c.want)
+		}
+	}
+	if got := OrganizedName(Track{ID: "1", Name: `AC/DC: "Live"?`}, Placement{Number: 1}); got != `01 - AC_DC_ _Live__ [1]` {
+		t.Errorf("unsafe %q", got)
+	}
+	long := OrganizedName(Track{ID: "123456789", Name: strings.Repeat("é", 200)}, Placement{Number: 1})
+	if !strings.HasSuffix(long, " [123456789]") || len(long) > 180 || !utf8.ValidString(long) {
+		t.Errorf("long %q (%d bytes)", long, len(long))
+	}
+	for in, want := range map[string]string{"": "Unknown", " . ": "Unknown", "track": "track", "AC/DC": "AC_DC",
+		"Mr. Bungle.": "Mr. Bungle", " Björk ": "Björk", strings.Repeat("a", 150): strings.Repeat("a", 100)} {
+		if got := FolderName(in, "Unknown"); got != want {
+			t.Errorf("FolderName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

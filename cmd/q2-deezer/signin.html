@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Deezer on Q2</title>
+<style>
+:root { --bg: #f4f5f7; --panel: #fff; --panel2: #eef0f3; --line: #dfe2e7; --text: #16191d; --muted: #646b75;
+  --accent: #8a2be2; --accent-ink: #fff; --accent-soft: #f0e3fd; --bad: #c62f3a; --good: #1f8a70; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1215; --panel: #171b20; --panel2: #1e242a; --line: #2a3138; --text: #e9edf1; --muted: #98a2ad;
+  --accent: #b77bff; --accent-ink: #1b0533; --accent-soft: #2e1a45; --bad: #ff6b74; --good: #3cc49f; } }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 520px; margin: 0 auto; padding: calc(24px + env(safe-area-inset-top)) 16px 32px; }
+.logo { width: 56px; height: 56px; border-radius: 16px; background: var(--accent); display: grid; place-items: center; margin: 0 auto 10px; }
+.logo span { display: flex; gap: 4px; align-items: flex-end; height: 26px; }
+.logo i { width: 5px; background: var(--accent-ink); border-radius: 2px; display: block; }
+h1 { text-align: center; font-size: 22px; margin: 0 0 4px; }
+.sub { text-align: center; color: var(--muted); margin: 0 0 20px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+.card h2 { font-size: 15px; margin: 0 0 10px; }
+ol { margin: 0; padding-left: 20px; }
+ol li { margin: 0 0 8px; }
+code { background: var(--panel2); padding: 1px 6px; border-radius: 6px; font-size: 13px; }
+textarea, input { width: 100%; border: 1px solid var(--line); background: var(--panel2); color: var(--text); border-radius: 10px;
+  padding: 10px 12px; font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; outline: none; }
+textarea { min-height: 96px; resize: vertical; word-break: break-all; }
+textarea:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.pin { font-size: 28px; letter-spacing: .4em; text-align: center; font-weight: 700; font-family: inherit; }
+button { font: inherit; font-weight: 650; border-radius: 10px; min-height: 44px; padding: 8px 16px; border: 1px solid var(--line);
+  background: var(--panel2); color: var(--text); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); width: 100%; margin-top: 10px; }
+button.danger { color: var(--bad); }
+.err { color: var(--bad); min-height: 20px; margin: 8px 0 0; font-size: 14px; }
+.ok { display: flex; gap: 12px; align-items: center; }
+.ok b { display: block; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--good); flex: none; }
+.muted { color: var(--muted); font-size: 13px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div class="logo"><span><i style="height:10px"></i><i style="height:17px"></i><i style="height:26px"></i><i style="height:17px"></i><i style="height:12px"></i></span></div>
+  <h1>Deezer on Q2</h1>
+  <p class="sub" id="sub">Sign the Q2 in to your Deezer account.</p>
+
+  <section id="pin" class="card hidden">
+    <h2>Enter the PIN on the Q2's screen</h2>
+    <form id="pinform"><input class="pin" id="pinv" type="text" inputmode="numeric" maxlength="6" placeholder="••••••" aria-label="PIN">
+      <div class="err" id="pinerr"></div><button class="primary">Continue</button></form>
+  </section>
+
+  <section id="done" class="card hidden">
+    <div class="ok"><span class="dot"></span><span><b id="who"></b><span class="muted" id="plan"></span></span></div>
+    <p class="muted" style="margin:12px 0 0">On the Q2, open <b>Streaming → Deezer</b> and pick what to download. You can close this page.</p>
+    <div class="row"><button id="again">Use another account</button><button class="danger" id="out">Sign out</button></div>
+  </section>
+
+  <section id="form" class="hidden">
+    <div class="card">
+      <h2>1. Copy your ARL from a computer</h2>
+      <p class="muted" style="margin:0 0 10px">The ARL is the sign-in cookie deezer.com keeps. The Q2 has no browser, so it borrows yours.</p>
+      <ol>
+        <li>On a computer, sign in at <b>deezer.com</b>.</li>
+        <li>Open the developer tools: <code>F12</code>, or <code>⌥⌘I</code> on a Mac.</li>
+        <li><b>Chrome / Edge:</b> Application → Cookies → <code>https://www.deezer.com</code>.<br>
+            <b>Firefox:</b> Storage → Cookies → <code>https://www.deezer.com</code>.<br>
+            <b>Safari:</b> Storage → Cookies (turn on Develop in Settings → Advanced first).</li>
+        <li>Copy the <b>Value</b> of the cookie named <code>arl</code>: a long run of letters and digits.</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h2>2. Paste it here</h2>
+      <form id="arlform"><textarea id="arl" placeholder="Paste the arl value" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
+        <div class="err" id="arlerr"></div><button class="primary" id="go">Sign in</button></form>
+      <p class="muted" style="margin:10px 0 0">It's checked with Deezer, then saved on the Q2's card in <code>.deezer/arl</code>. Treat it like a password: anyone with it can use your account. A paid Deezer plan is needed: songs download to the Q2's card in FLAC or MP3, then play from it.</p>
+    </div>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+async function call(path, body) {
+  const r = await fetch("/api/" + path, body === undefined ? {} :
+    { method: "POST", headers: { "Content-Type": "application/json", "X-Q2": "1" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || r.statusText); e.status = r.status; throw e; }
+  return j;
+}
+function show(id) { for (const s of ["pin", "done", "form"]) $("#" + s).classList.toggle("hidden", s !== id); }
+async function refresh() {
+  try {
+    const st = await call("state");
+    if (st.signed_in) {
+      $("#who").textContent = "Signed in as " + st.name; $("#plan").textContent = st.plan; $("#sub").textContent = "All set.";
+      show("done");
+    } else {
+      $("#arlerr").textContent = st.error || ""; show("form");
+    }
+  } catch (e) {
+    if (e.status === 401) { show("pin"); setTimeout(() => $("#pinv").focus(), 50); }
+    else $("#sub").textContent = "The Q2 can't be reached. Is Deezer still open on it?";
+  }
+}
+$("#pinform").onsubmit = async e => {
+  e.preventDefault();
+  try { await call("login", { pin: $("#pinv").value }); refresh(); } catch (err) { $("#pinerr").textContent = err.message; }
+};
+$("#arlform").onsubmit = async e => {
+  e.preventDefault();
+  $("#go").disabled = true; $("#go").textContent = "Checking with Deezer…"; $("#arlerr").textContent = "";
+  try { await call("arl", { arl: $("#arl").value }); $("#arl").value = ""; refresh(); }
+  catch (err) { $("#arlerr").textContent = err.message; }
+  finally { $("#go").disabled = false; $("#go").textContent = "Sign in"; }
+};
+$("#again").onclick = () => show("form");
+$("#out").onclick = async () => {
+  if (!confirm("Sign the Q2 out of Deezer? Playback stops and the ARL is removed from the card.")) return;
+  try { await call("signout", {}); refresh(); } catch (err) { alert(err.message); }
+};
+refresh();
+</script>
+</body>
+</html>
