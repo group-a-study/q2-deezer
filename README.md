@@ -27,7 +27,7 @@ Deezer's page has **Downloaded Songs**, **Liked Songs**, **Playlists** (Flow and
 - A song already on the card says so, and pressing it plays it from the card.
 - Downloads carry on with the page closed, one song at a time, and wait by themselves while you're offline. The Q2 stays awake while a song downloads.
 - Run **Library → Update Local Music** for your downloads to show in Artists, Albums and Coverflow too.
-- Each song is tagged with its lyrics: time-synced ones as LRC (`[01:03.01]A line`), shown in time in Now Playing on Q2 Pod and by Navidrome and most players, else the plain text. Synced lyrics come from [LRCLIB](https://lrclib.net) when it has them, as Q2 Pod's own lyrics search finds them, since Deezer's light each line about 0.75 s before it's sung; otherwise Deezer's.
+- Each song is tagged with its lyrics when Deezer has them: time-synced ones as LRC (`[01:03.01]A line`), shown in time in Now Playing on Q2 Pod and by Navidrome and most players, else the plain text.
 - A song Deezer doesn't license in your account's country (an account made in Turkey is TR wherever you use it) downloads from another release of it when Deezer has one, as Deezer's own apps do: Angus & Julia Stone's *Snow* is licensed only in Australia and New Zealand, so it comes from its international edition. With none, it fails saying so.
 
 ## Stream or download

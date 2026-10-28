@@ -146,12 +146,9 @@ file keeps the song's own name and tags. A song with neither fails, "not license
 country (TR)". The file is
 fetched to a temporary <name>-<n>.flac.part beside its name (a dropped connection resumed with an
 HTTP range and If-Range, a CDN address that expires mid-file resolved again, a file short of its
-length refused), decrypted as it arrives, tagged, then renamed into place. The tags include the song's lyrics:
-LRCLIB's time-synced ones when it has them, found as Q2 Pod's own lyrics search finds them (its
-search by title and first artist, the first result with synced lyrics, less opening credit lines;
-asked up to 3 times, 2 s apart, while it answers busy), else Deezer's (song.getLyrics), whose lines
-start about 0.75 s before they are sung. Time-synced ones are LRC, "[01:03.01]A line" a line, else
-the plain text, in a FLAC's LYRICS and an MP3's USLT (UTF-8, language XXX), both of
+length refused), decrypted as it arrives, tagged, then renamed into place. The tags include the song's lyrics when
+Deezer has them (song.getLyrics, one more request): time-synced ones as LRC, "[01:03.01]A line" a
+line, else the plain text, in a FLAC's LYRICS and an MP3's USLT (UTF-8, language XXX), both of
 which TagLib reads as LYRICS: Q2 Pod shows them in Now Playing (in time from 1.4.2, group-a-study's
 fork), as do Navidrome and most players. One song downloads at a
 time. Offline, signed out or with the card away, the queue waits and tries again every 30 s.
