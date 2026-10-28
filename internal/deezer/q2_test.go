@@ -282,3 +282,81 @@ func TestLyricsText(t *testing.T) {
 		t.Errorf("none %q", got)
 	}
 }
+
+// The package's tests answer for Deezer alone; the LRCLIB tests below ask it on purpose.
+func init() { lrclibSearch = "" }
+
+// lrclibClient answers LRCLIB's search with replies in turn (a status, then a body) and Deezer's
+// song.getLyrics with one synced line; deezer counts Deezer's answers, asked the queries LRCLIB got.
+func lrclibClient(t *testing.T, replies []string, deezer *int, asked *[]string) *Client {
+	t.Helper()
+	old, wait := lrclibSearch, lrclibWait
+	lrclibSearch, lrclibWait = "https://lrclib.test/api/search", 0
+	t.Cleanup(func() { lrclibSearch, lrclibWait = old, wait })
+	c := New("dummy")
+	loggedInPremium(c)
+	c.http = &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "gw-light.php") {
+			*deezer++
+			return jsonResponse([]byte(`{"error":{},"results":{"LYRICS_TEXT":"Early","LYRICS_SYNC_JSON":[{"milliseconds":"1000","line":"Early"}]}}`)), nil
+		}
+		if r.Header.Get("User-Agent") != lrclibAgent {
+			t.Errorf("User-Agent %q", r.Header.Get("User-Agent"))
+		}
+		*asked = append(*asked, r.URL.RawQuery)
+		if len(replies) == 0 {
+			t.Fatal("asked LRCLIB once too often")
+		}
+		status, body, _ := strings.Cut(replies[0], " ")
+		replies = replies[1:]
+		resp := jsonResponse([]byte(body))
+		resp.StatusCode, resp.Status = map[string]int{"200": 200, "503": 503, "404": 404}[status], status
+		return resp, nil
+	})}
+	return c
+}
+
+// A download's lyrics are LRCLIB's first synced result for the title and first artist, its credit
+// lines gone, asked again while it's busy; Deezer's early-timed lines only when LRCLIB has none.
+func TestLyricsTagLRCLIB(t *testing.T) {
+	tr := Track{ID: "8086126", Name: "Rolling in the Deep", Artists: []Artist{{Name: "Adele"}, {Name: "Guest"}}}
+	var deezer int
+	var asked []string
+	c := lrclibClient(t, []string{"503 {}", "503 {}",
+		`200 [{"syncedLyrics":null},{"syncedLyrics":"[00:00.50] Producer : Paul Epworth\r\n[00:01.00] \r\n[00:05.10] There's a fire starting in my heart\r\n[00:09.72] Reaching a fever pitch\r\n[03:45.05] \r\n"}]`},
+		&deezer, &asked)
+	want := "[00:01.00] \n[00:05.10] There's a fire starting in my heart\n[00:09.72] Reaching a fever pitch\n[03:45.05]\n"
+	if got := c.LyricsTag(tr); got != want || deezer != 0 {
+		t.Errorf("LRCLIB's: %q, Deezer asked %d times", got, deezer)
+	}
+	if len(asked) != 3 || asked[0] != "artist_name=Adele&track_name=Rolling+in+the+Deep" {
+		t.Errorf("queries %q", asked)
+	}
+
+	for _, reply := range []string{`200 []`, `200 [{"syncedLyrics":"[00:01.00] Lyrics : Someone\n"}]`, `404 {}`} {
+		deezer, asked = 0, nil
+		c = lrclibClient(t, []string{reply}, &deezer, &asked)
+		if got := c.LyricsTag(tr); got != "[00:01.00]Early\n" || deezer != 1 || len(asked) != 1 {
+			t.Errorf("%s: %q, Deezer asked %d times, LRCLIB %d", reply, got, deezer, len(asked))
+		}
+	}
+
+	deezer, asked = 0, nil
+	c = lrclibClient(t, []string{"503 {}", "503 {}", "503 {}"}, &deezer, &asked)
+	if got := c.LyricsTag(tr); got != "[00:01.00]Early\n" || len(asked) != lrclibTries {
+		t.Errorf("busy throughout: %q after %d requests", got, len(asked))
+	}
+}
+
+func TestLrcBody(t *testing.T) {
+	for in, want := range map[string]string{
+		"[00:01.00] Composer : A\n\n[00:02.00] Lyricist : B\n[00:03.00] Sung\n": "[00:03.00] Sung\n",
+		"[ar:Adele]\n[00:01.00] A : B\n[00:02.00] Sung\n":                       "[ar:Adele]\n[00:01.00] A : B\n[00:02.00] Sung\n",
+		"[00:01.00] Credits : only\n":                                           "",
+		"[00:01.00]\n[00:02.00] Sung\n":                                         "[00:01.00]\n[00:02.00] Sung\n",
+	} {
+		if got := lrcBody(in); got != want {
+			t.Errorf("lrcBody(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -30,7 +30,7 @@ import (
 	"github.com/group-a-study/q2-deezer/internal/tlsroots"
 )
 
-const version = "q2-v3.3"
+const version = "q2-v3.4"
 
 // transport carries every request to Deezer: TLS checked against the add-on's own roots, as the
 // firmware has none. Tests answer for Deezer instead.

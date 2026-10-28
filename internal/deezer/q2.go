@@ -9,10 +9,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // transport carries every request: the session's (New), the media service's and the CDN's. nil is
@@ -326,15 +329,129 @@ func (c *Client) AlbumInfo(id string) (Album, string, error) {
 // for Deezer without them turn it off.
 var fetchLyrics = true
 
+// lrclibSearch is LRCLIB's search, which the Q2's own lyrics search asks too; "" asks Deezer alone
+// (the package's tests, which answer for Deezer only).
+var lrclibSearch = "https://lrclib.net/api/search"
+
+// LRCLIB answers 503 (Retry-After: 1) or 429 while it is busy: asked lrclibTries times in all,
+// lrclibWait apart, as the Q2's Download Album Lyrics asks it.
+var lrclibWait = 2 * time.Second
+
+const (
+	lrclibTries   = 3
+	lrclibTimeout = 15 * time.Second
+	lrclibMax     = 512 << 10 // up to 20 results, each with plain and synced text
+	lrclibAgent   = "q2-deezer (https://github.com/group-a-study/q2-deezer)"
+)
+
 // LyricsTag is a song's lyrics as a file embeds them (FLAC LYRICS, ID3 USLT): time-synced ones as
 // LRC, a "[mm:ss.xx]" stamp before each line, which the Q2 (Q2 Pod), Navidrome and most players
-// show in time; else the plain text. "" when Deezer has none (or can't be asked).
-func (c *Client) LyricsTag(id string) string {
-	l, err := c.Lyrics(id)
+// show in time; else the plain text. The synced ones are LRCLIB's when it has them: Deezer's lines
+// start about 0.75 s before they are sung (Rolling in the Deep's, against LRCLIB's and the audio's),
+// so its own come only after. "" when neither has any (or can't be asked).
+func (c *Client) LyricsTag(t Track) string {
+	if s := c.lrclibLyrics(t); s != "" {
+		return s
+	}
+	l, err := c.Lyrics(t.ID)
 	if err != nil || l == nil {
 		return ""
 	}
 	return LyricsText(*l)
+}
+
+// lrclibLyrics is LRCLIB's synced lyrics for t's title and first artist, found as the Q2's lyrics
+// search finds them (Q2 Pod's patch/onlinematch.c): the first search result that has them, less its
+// opening credit lines (lrcBody), its lines ending in "\n". "" if none or LRCLIB can't be asked.
+func (c *Client) lrclibLyrics(t Track) string {
+	artist := t.ArtistLine()
+	if len(t.Artists) > 0 {
+		artist = t.Artists[0].Name
+	}
+	if lrclibSearch == "" || strings.TrimSpace(t.Name) == "" {
+		return ""
+	}
+	q := url.Values{"track_name": {t.Name}, "artist_name": {artist}}
+	for try := 1; ; try++ {
+		body, busy := c.lrclibGet(lrclibSearch + "?" + q.Encode())
+		if !busy || try == lrclibTries {
+			return lrclibFirst(body)
+		}
+		time.Sleep(lrclibWait)
+	}
+}
+
+// lrclibGet is LRCLIB's reply to u, nil unless 200; busy when it said it was.
+func (c *Client) lrclibGet(u string) (body []byte, busy bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), lrclibTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("User-Agent", lrclibAgent) // as LRCLIB asks
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusTooManyRequests
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, lrclibMax))
+	if err != nil {
+		return nil, false
+	}
+	return b, false
+}
+
+// lrclibFirst is the first of a search's results (body) with synced lyrics left after lrcBody,
+// tidied to "\n" line ends; "" if none.
+func lrclibFirst(body []byte) string {
+	var results []struct {
+		Synced *string `json:"syncedLyrics"`
+	}
+	if json.Unmarshal(body, &results) != nil {
+		return ""
+	}
+	for _, r := range results {
+		if r.Synced == nil {
+			continue
+		}
+		text := strings.TrimSpace(lrcBody(strings.ReplaceAll(*r.Synced, "\r\n", "\n")))
+		if text != "" {
+			return text + "\n"
+		}
+	}
+	return ""
+}
+
+// lrcBody is lrc past its opening credit lines ("[00:01.00] Mix Engineer : Name", NetEase's style,
+// which LRCLIB keeps): each line, up to the first sung one, whose text holds " : ", and any blank
+// line before one. A tag line such as [offset:...] ends the search, so it stays; lyrics with no sung
+// line at all come back empty. As Q2 Pod's lrc_body.
+func lrcBody(lrc string) string {
+	rest := lrc
+	for rest != "" {
+		line, next, _ := strings.Cut(rest, "\n")
+		text := line
+		for len(text) > 1 && text[0] == '[' && text[1] >= '0' && text[1] <= '9' { // its [mm:ss.xx] times
+			end := strings.IndexByte(text, ']')
+			if end < 0 {
+				break
+			}
+			text = text[end+1:]
+		}
+		credit, blank := strings.Contains(text, " : "), strings.TrimRight(text, " \r") == ""
+		if !credit && !blank {
+			return lrc // the first sung line, or a tag
+		}
+		rest = next
+		if credit {
+			lrc = next
+		}
+	}
+	return ""
 }
 
 // LyricsText is l as LyricsTag embeds it, its lines ending in "\n".
